@@ -1,5 +1,20 @@
 # Rust/codex-rs
 
+## Fork commits
+
+Maintain a feature-patch stack on top of upstream: one complete, self-contained
+feature or independent fix per commit, including its tests and required generated
+artifacts. Do not create WIP, checkpoint, or partial implementation commits.
+Keep unfinished changes in the working tree until their outcome is complete.
+
+Amend the owning feature commit when it changes, replaying descendants rather
+than accumulating follow-up fixes or integration commits. Fold feature-specific
+groundwork into that feature before publication. Preserve upstream ancestry and
+rebase the feature stack onto upstream updates. Inspect the range-diff after a
+rewrite; publish authorized updates with an explicit
+`--force-with-lease=<branch>:<observed-remote-sha>`, never an unconditional force
+push. This history policy does not itself authorize publication.
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
@@ -31,6 +46,7 @@ In the codex-rs folder where the rust code lives:
 - Do not add negative tests for logic that was removed.
 - Do not add general product or user-facing documentation to the `docs/` folder. The official Codex documentation lives elsewhere. The exception is app-server API documentation, which is covered by the app-server guidance below.
 - Prefer private modules and explicitly exported public crate API.
+- Do not use cryptographic hashes for routine change detection or request-path comparisons. Compare typed values directly; derive stable storage keys outside hot paths.
 - If you change `ConfigToml` or nested config types, run `just write-config-schema` to update `codex-rs/core/config.schema.json`.
 - When working with MCP tool calls, prefer using `codex-rs/codex-mcp/src/mcp_connection_manager.rs` to handle mutation of tools and tool calls. Aim to minimize the footprint of changes and leverage existing abstractions rather than plumbing code through multiple levels of function calls.
 - Do not call `reset_client_session` unnecessarily; let the incremental check logic decide whether to reuse the previous request.
@@ -68,6 +84,52 @@ Run `just fmt` (in the `codex-rs` directory) automatically after you have finish
 3. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `just test`. Avoid `--all-features` for routine local runs because it expands the build matrix and can significantly increase `target/` disk usage; use it only when you specifically need full feature coverage. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
+
+## NixOS development environment
+
+Run from the repository root to use the pinned Nix packages while retaining the
+repository's rustup toolchain. The login test graph needs OpenSSL, ALSA, libcap,
+and D-Bus development files; the repository formatter also needs DotSlash.
+
+```sh
+nix develop --impure --expr '
+  let
+    flake = builtins.getFlake (toString ./.);
+    pkgs = import flake.inputs.nixpkgs { system = builtins.currentSystem; };
+  in pkgs.mkShell {
+    packages = with pkgs; [ pkg-config openssl alsa-lib libcap dbus cmake clang dotslash ];
+    LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+  }
+' -c just test -p codex-login
+```
+
+Use the same environment for `just fix -p codex-login` and `just fmt`. Cargo's
+existing build directory is shared across these invocations.
+
+The pinned Python SDK schema generator (`datamodel-code-generator==0.31.2`)
+does not support running under Python 3.14. Use `UV_PYTHON=3.13` when invoking
+`just write-app-server-schema`; Python 3.13 satisfies the SDK's declared range.
+
+## NixOS development environment
+
+Run from the repository root to use the pinned Nix packages while retaining the
+repository's rustup toolchain. The login test graph needs OpenSSL, ALSA, libcap,
+and D-Bus development files; the repository formatter also needs DotSlash.
+
+```sh
+nix develop --impure --expr '
+  let
+    flake = builtins.getFlake (toString ./.);
+    pkgs = import flake.inputs.nixpkgs { system = builtins.currentSystem; };
+  in pkgs.mkShell {
+    packages = with pkgs; [ pkg-config openssl alsa-lib libcap dbus cmake clang dotslash ];
+    LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+  }
+' -c just test -p codex-login
+```
+
+Use the same environment for `just fix -p codex-login` and `just fmt`. Cargo's
+existing build directory is shared across these invocations.
 
 ## The `codex-core` crate
 
