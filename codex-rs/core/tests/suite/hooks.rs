@@ -2034,8 +2034,12 @@ async fn pre_tool_use_hook_spills_large_additional_context() -> Result<()> {
     Ok(())
 }
 
+#[test_case::test_case(false; "root")]
+#[test_case::test_case(true; "spawned_child")]
 #[tokio::test]
-async fn compact_session_start_hook_records_additional_context_for_next_turn() -> Result<()> {
+async fn compact_session_start_hook_records_additional_context_for_next_turn(
+    child: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2072,7 +2076,23 @@ async fn compact_session_start_hook_records_additional_context_for_next_turn() -
             config.model_provider = model_provider;
             trust_discovered_hooks(config);
         });
-    let test = builder.build(&server).await?;
+    let mut test = builder.build_with_auto_env(&server).await?;
+    if child {
+        let thread = test
+            .thread_manager
+            .start_thread(StartThreadOptions {
+                session_source: Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                    parent_thread_id: test.session_configured.thread_id,
+                    depth: 1,
+                    agent_path: None,
+                    agent_nickname: None,
+                    agent_role: None,
+                })),
+                ..StartThreadOptions::new(test.config.clone())
+            })
+            .await?;
+        test.codex = thread.thread;
+    }
 
     test.submit_turn("hello before compact").await?;
     test.codex.submit(Op::Compact).await?;

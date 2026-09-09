@@ -143,6 +143,11 @@ pub(crate) async fn run_pending_session_start_hooks(
                     agent_type: context.agent_type,
                 }
             }
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) => {
+                StartHookTarget::SessionStart {
+                    source: session_start_source,
+                }
+            }
             SessionSource::SubAgent(_) => return false,
             _ => StartHookTarget::SessionStart {
                 source: session_start_source,

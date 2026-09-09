@@ -12650,6 +12650,7 @@ async fn session_start_hooks_only_load_from_trusted_project_layers() -> std::io:
     write_project_trust_config(&codex_home, &[(&nested, TrustLevel::Trusted)]).await?;
 
     let config = ConfigBuilder::default()
+        .loader_overrides(crate::config::LoaderOverrides::without_managed_config_for_tests())
         .codex_home(codex_home)
         .fallback_cwd(Some(nested))
         .build()
@@ -12710,6 +12711,7 @@ async fn session_start_hooks_require_project_trust_without_config_toml() -> std:
         write_project_trust_config(&codex_home, &trust_entries).await?;
 
         let config = ConfigBuilder::default()
+            .loader_overrides(crate::config::LoaderOverrides::without_managed_config_for_tests())
             .codex_home(codex_home)
             .fallback_cwd(Some(nested.clone()))
             .build()
