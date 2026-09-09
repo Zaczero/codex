@@ -9,6 +9,10 @@ use crate::ToolPayload;
 
 /// Model-facing output contract returned by executable tool runtimes.
 pub trait ToolOutput: Send {
+    /// Compact task state for the native conversation UI when visible state changes.
+    fn plan_update(&self) -> Option<codex_protocol::plan_tool::UpdatePlanArgs> {
+        None
+    }
     /// Account bound to the backend request producing encrypted output, if known.
     fn account_scope(&self) -> Option<codex_protocol::auth::AccountScope> {
         None
@@ -70,6 +74,9 @@ impl<T> ToolOutput for Box<T>
 where
     T: ToolOutput + ?Sized,
 {
+    fn plan_update(&self) -> Option<codex_protocol::plan_tool::UpdatePlanArgs> {
+        (**self).plan_update()
+    }
     fn account_scope(&self) -> Option<codex_protocol::auth::AccountScope> {
         (**self).account_scope()
     }

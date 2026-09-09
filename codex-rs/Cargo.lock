@@ -2223,6 +2223,7 @@ dependencies = [
  "codex-skills",
  "codex-skills-extension",
  "codex-state",
+ "codex-tasks-extension",
  "codex-thread-store",
  "codex-tools",
  "codex-user-verification",
@@ -4575,6 +4576,21 @@ dependencies = [
  "pretty_assertions",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-tasks-extension"
+version = "0.0.0"
+dependencies = [
+ "codex-extension-api",
+ "codex-protocol",
+ "codex-tools",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

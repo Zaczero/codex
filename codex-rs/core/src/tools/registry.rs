@@ -223,6 +223,9 @@ struct PostToolUseFeedbackOutput {
 }
 
 impl ToolOutput for PostToolUseFeedbackOutput {
+    fn plan_update(&self) -> Option<codex_protocol::plan_tool::UpdatePlanArgs> {
+        self.original.plan_update()
+    }
     fn log_output(&self) -> String {
         self.original.log_output()
     }
@@ -780,6 +783,15 @@ async fn handle_any_tool(
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
     let output = tool.handle(invocation.clone()).await?;
+    if let Some(plan) = output.plan_update() {
+        invocation
+            .session
+            .send_event(
+                &invocation.turn,
+                codex_protocol::protocol::EventMsg::PlanUpdate(plan),
+            )
+            .await;
+    }
     if output.contains_external_context()
         && invocation.turn.config.memories.disable_on_external_context
     {

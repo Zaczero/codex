@@ -2628,6 +2628,42 @@ fn plan_update_without_note_snapshot() {
 }
 
 #[test]
+fn ledger_plan_feedback_snapshot() {
+    let cell = new_plan_update(UpdatePlanArgs {
+        explanation: Some("1 active · 1 blocked · 1 done".into()),
+        plan: vec![
+            PlanItemArg {
+                step: "#2 Validate account switching".into(),
+                status: StepStatus::InProgress,
+            },
+            PlanItemArg {
+                step: "#3 Publish the build (waiting)".into(),
+                status: StepStatus::Pending,
+            },
+            PlanItemArg {
+                step: "#1 Implement account storage".into(),
+                status: StepStatus::Completed,
+            },
+        ],
+    });
+    insta::assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 60)).join("\n"));
+}
+
+#[test]
+fn ledger_plan_feedback_large_snapshot() {
+    let cell = new_plan_update(UpdatePlanArgs {
+        explanation: Some("9 active · 0 ready".into()),
+        plan: (1..=8)
+            .map(|id| PlanItemArg {
+                step: format!("#{id} Outcome {id}"),
+                status: StepStatus::InProgress,
+            })
+            .collect(),
+    });
+    insta::assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 60)).join("\n"));
+}
+
+#[test]
 fn plan_update_does_not_split_url_like_tokens_in_note_or_step() {
     let note_url = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
     let step_url = "example.test/api/v1/projects/beta-team/releases/2026-02-17/builds/0987654321/artifacts/reports/performance";

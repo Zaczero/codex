@@ -318,6 +318,14 @@ impl ChatWidget {
             SlashCommand::Plan => {
                 self.apply_plan_slash_command();
             }
+            SlashCommand::Parallelism => self.dispatch_parallelism_command(""),
+            SlashCommand::Tasks => {
+                if let Some(thread_id) = self.thread_id {
+                    self.app_event_tx.send(AppEvent::OpenTasks { thread_id });
+                } else {
+                    self.add_info_message("No unfinished tasks.".to_string(), /*hint*/ None);
+                }
+            }
             SlashCommand::Goal => {
                 if !self.config.features.enabled(Feature::Goals) {
                     return;
@@ -741,6 +749,7 @@ impl ChatWidget {
         let trimmed = args.trim();
         match cmd {
             SlashCommand::Export if trimmed.is_empty() => self.show_transcript_export_popup(),
+            SlashCommand::Parallelism => self.dispatch_parallelism_command(trimmed),
             SlashCommand::Export => {
                 self.set_queue_autosend_suppressed(/*suppressed*/ true);
                 self.app_event_tx.send(AppEvent::ExportTranscript {
@@ -1225,6 +1234,8 @@ impl ChatWidget {
             | SlashCommand::Personality
             | SlashCommand::Plan
             | SlashCommand::Goal
+            | SlashCommand::Tasks
+            | SlashCommand::Parallelism
             | SlashCommand::Side
             | SlashCommand::Btw
             | SlashCommand::Keymap

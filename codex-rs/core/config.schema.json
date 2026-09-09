@@ -1004,6 +1004,9 @@
             "step_model_switching": {
               "type": "boolean"
             },
+            "tasks": {
+              "type": "boolean"
+            },
             "telepathy": {
               "type": "boolean"
             },
@@ -6491,6 +6494,9 @@
           "type": "boolean"
         },
         "step_model_switching": {
+          "type": "boolean"
+        },
+        "tasks": {
           "type": "boolean"
         },
         "telepathy": {

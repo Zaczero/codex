@@ -8,6 +8,30 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
 impl Session {
+    pub(crate) async fn continue_unfinished_work(&self, turn: &TurnContext) -> bool {
+        use crate::context::ContextualUserFragment;
+        let mut continued = false;
+        for contributor in self.services.extensions.turn_lifecycle_contributors() {
+            if let Some(reason) = contributor
+                .on_completion_attempt(codex_extension_api::TurnStopInput {
+                    session_store: &self.services.session_extension_data,
+                    thread_store: &self.services.thread_extension_data,
+                    turn_store: turn.extension_data.as_ref(),
+                })
+                .await
+            {
+                let fragment = crate::context::CompletionContinuation::new(reason);
+                self.record_response_item_and_emit_turn_item(
+                    turn,
+                    ContextualUserFragment::into(fragment),
+                )
+                .await;
+                continued = true;
+            }
+        }
+        continued
+    }
+
     pub(super) async fn emit_turn_start_lifecycle(
         &self,
         turn_context: &TurnContext,

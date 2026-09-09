@@ -6036,6 +6036,46 @@ class ThreadStatusChangedNotification(BaseModel):
     thread_id: Annotated[str, Field(alias="threadId")]
 
 
+class ThreadTaskParallelismParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    parallelism: Annotated[
+        int | None,
+        Field(
+            description="Set this session's task capacity immediately. Omit or use null to read it. Zero disables capacity limits and completion reminders.",
+            ge=0,
+        ),
+    ] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadTaskParallelismResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    parallelism: Annotated[int, Field(ge=0)]
+
+
+class ThreadTasksReadParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
+class ThreadTasksReadResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    text: Annotated[
+        str,
+        Field(
+            description="Human-readable snapshot of every unfinished task with its complete details. Completed and cancelled task rows are excluded."
+        ),
+    ]
+
+
 class TurnStartedThreadTimelineEntry(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6650,6 +6690,26 @@ class ThreadNameSetRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["thread/name/set"], Field(title="Thread/name/setRequestMethod")]
     params: ThreadSetNameParams
+
+
+class ThreadTasksParallelismRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["thread/tasks/parallelism"], Field(title="Thread/tasks/parallelismRequestMethod")
+    ]
+    params: ThreadTaskParallelismParams
+
+
+class ThreadTasksReadRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/tasks/read"], Field(title="Thread/tasks/readRequestMethod")]
+    params: ThreadTasksReadParams
 
 
 class ThreadGoalGetRequest(BaseModel):
@@ -12074,6 +12134,8 @@ class ClientRequest(
         | ThreadDeleteRequest
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
+        | ThreadTasksParallelismRequest
+        | ThreadTasksReadRequest
         | ThreadGoalSetRequest
         | ThreadGoalGetRequest
         | ThreadGoalClearRequest
@@ -12183,6 +12245,8 @@ class ClientRequest(
         | ThreadDeleteRequest
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
+        | ThreadTasksParallelismRequest
+        | ThreadTasksReadRequest
         | ThreadGoalSetRequest
         | ThreadGoalGetRequest
         | ThreadGoalClearRequest

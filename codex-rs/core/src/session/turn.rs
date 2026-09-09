@@ -598,6 +598,15 @@ pub(crate) async fn run_turn(
                     if stop_outcome.should_stop {
                         break;
                     }
+                    if sess.continue_unfinished_work(&turn_context).await {
+                        sess.input_queue
+                            .accept_mailbox_delivery_for_current_turn(
+                                &sess.active_turn,
+                                &turn_context.sub_id,
+                            )
+                            .await;
+                        continue;
+                    }
                     if run_legacy_after_agent_hook(
                         &sess,
                         &turn_context,

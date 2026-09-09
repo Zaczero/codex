@@ -39,6 +39,83 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
 
 impl CoreToolRuntime for TestHandler {}
 
+struct PlanFeedback;
+
+impl ToolOutput for PlanFeedback {
+    fn plan_update(&self) -> Option<codex_protocol::plan_tool::UpdatePlanArgs> {
+        Some(codex_protocol::plan_tool::UpdatePlanArgs {
+            explanation: Some("1 active".to_owned()),
+            plan: vec![codex_protocol::plan_tool::PlanItemArg {
+                step: "Implement ledger feedback".to_owned(),
+                status: codex_protocol::plan_tool::StepStatus::InProgress,
+            }],
+        })
+    }
+    fn log_output(&self) -> String {
+        "updated".to_owned()
+    }
+    fn success_for_logging(&self) -> bool {
+        true
+    }
+    fn to_response_item(
+        &self,
+        call_id: &str,
+        _: &ToolPayload,
+    ) -> codex_protocol::models::ResponseInputItem {
+        codex_protocol::models::ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.to_owned(),
+            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                "updated".to_owned(),
+            ),
+        }
+    }
+}
+
+struct PlanFeedbackHandler;
+
+impl ToolExecutor<ToolInvocation> for PlanFeedbackHandler {
+    fn tool_name(&self) -> codex_tools::ToolName {
+        codex_tools::ToolName::plain("ledger")
+    }
+    fn spec(&self) -> codex_tools::ToolSpec {
+        test_spec(&self.tool_name())
+    }
+    fn handle<'a>(&'a self, _: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
+        Box::pin(async { Ok(Box::new(PlanFeedback) as Box<dyn ToolOutput>) })
+    }
+}
+
+impl CoreToolRuntime for PlanFeedbackHandler {}
+
+#[tokio::test]
+async fn tool_plan_feedback_emits_one_native_plan_event() -> anyhow::Result<()> {
+    let (session, turn, receiver) = crate::session::tests::make_session_and_context_with_rx().await;
+    let registry =
+        ToolRegistry::from_tools([Arc::new(PlanFeedbackHandler) as Arc<dyn CoreToolRuntime>]);
+    registry
+        .dispatch_any_with_terminal_outcome(
+            test_invocation(
+                session,
+                turn,
+                "ledger-call",
+                codex_tools::ToolName::plain("ledger"),
+            ),
+            /*terminal_outcome_reached*/ None,
+        )
+        .await?;
+    let plans = std::iter::from_fn(|| receiver.try_recv().ok())
+        .filter_map(|event| match event.msg {
+            codex_protocol::protocol::EventMsg::PlanUpdate(plan) => Some(plan),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(plans, vec![PlanFeedback.plan_update().unwrap()]);
+    Ok(())
+}
+
 struct ReadinessTestHandler {
     handler: TestHandler,
     readiness_waits: Arc<AtomicUsize>,

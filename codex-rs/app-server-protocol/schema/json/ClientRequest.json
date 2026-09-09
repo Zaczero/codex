@@ -5280,6 +5280,37 @@
       ],
       "type": "string"
     },
+    "ThreadTaskParallelismParams": {
+      "properties": {
+        "parallelism": {
+          "description": "Set this session's task capacity immediately. Omit or use null to read it. Zero disables capacity limits and completion reminders.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
+    "ThreadTasksReadParams": {
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadTurnsListParams": {
       "properties": {
         "cursor": {
@@ -6008,6 +6039,54 @@
         "params"
       ],
       "title": "Thread/name/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/tasks/parallelism"
+          ],
+          "title": "Thread/tasks/parallelismRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadTaskParallelismParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/tasks/parallelismRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/tasks/read"
+          ],
+          "title": "Thread/tasks/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadTasksReadParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/tasks/readRequest",
       "type": "object"
     },
     {

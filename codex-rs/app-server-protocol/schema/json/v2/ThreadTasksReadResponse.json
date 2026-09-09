@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "text": {
+      "description": "Human-readable snapshot of every unfinished task with its complete details. Completed and cancelled task rows are excluded.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "text"
+  ],
+  "title": "ThreadTasksReadResponse",
+  "type": "object"
+}

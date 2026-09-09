@@ -616,6 +616,13 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
     },
 
+    TaskParallelism {
+        thread_id: ThreadId,
+        parallelism: Option<usize>,
+    },
+    OpenTasks {
+        thread_id: ThreadId,
+    },
     /// Open the current thread goal summary/action menu.
     OpenThreadGoalMenu {
         thread_id: ThreadId,

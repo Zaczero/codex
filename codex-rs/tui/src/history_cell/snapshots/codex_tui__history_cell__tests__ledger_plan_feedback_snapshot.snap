@@ -1,0 +1,9 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "render_lines(&cell.display_lines(60)).join(\"\\n\")"
+---
+• Updated Plan
+  └ 1 active · 1 blocked · 1 done
+    □ #2 Validate account switching
+    □ #3 Publish the build (waiting)
+    ✔ #1 Implement account storage

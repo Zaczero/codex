@@ -1301,6 +1301,12 @@ impl MessageProcessor {
                     .thread_set_name(request_id.clone(), params)
                     .await
             }
+            ClientRequest::ThreadTaskParallelism { params, .. } => {
+                self.thread_processor.thread_task_parallelism(params).await
+            }
+            ClientRequest::ThreadTasksRead { params, .. } => {
+                self.thread_processor.thread_tasks_read(params).await
+            }
             ClientRequest::ThreadGoalSet { params, .. } => {
                 self.thread_goal_processor
                     .thread_goal_set(request_id.clone(), params)

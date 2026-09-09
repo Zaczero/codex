@@ -280,6 +280,8 @@ mod slash_commands;
 mod status_and_layout;
 mod status_command_tests;
 mod status_surface_previews;
+#[path = "tests/task_commands_tests.rs"]
+mod task_commands_tests;
 mod terminal_title;
 mod usage;
 #[path = "tests/worktree_picker_tests.rs"]

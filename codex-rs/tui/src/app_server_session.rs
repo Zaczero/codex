@@ -119,6 +119,10 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
+use codex_app_server_protocol::ThreadTaskParallelismParams;
+use codex_app_server_protocol::ThreadTaskParallelismResponse;
+use codex_app_server_protocol::ThreadTasksReadParams;
+use codex_app_server_protocol::ThreadTasksReadResponse;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
@@ -1494,6 +1498,33 @@ impl AppServerSession {
             .await
             .wrap_err("memory/reset failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn thread_task_parallelism(
+        &mut self,
+        params: ThreadTaskParallelismParams,
+    ) -> Result<ThreadTaskParallelismResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadTaskParallelism { request_id, params })
+            .await
+            .wrap_err("thread/tasks/parallelism failed in TUI")
+    }
+
+    pub(crate) async fn thread_tasks_read(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadTasksReadResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadTasksRead {
+                request_id,
+                params: ThreadTasksReadParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("thread/tasks/read failed in TUI")
     }
 
     pub(crate) async fn thread_goal_get(

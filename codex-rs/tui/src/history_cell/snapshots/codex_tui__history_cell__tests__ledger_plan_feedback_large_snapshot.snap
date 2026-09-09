@@ -1,0 +1,14 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "render_lines(&cell.display_lines(60)).join(\"\\n\")"
+---
+• Updated Plan
+  └ 9 active · 0 ready
+    □ #1 Outcome 1
+    □ #2 Outcome 2
+    □ #3 Outcome 3
+    □ #4 Outcome 4
+    □ #5 Outcome 5
+    □ #6 Outcome 6
+    □ #7 Outcome 7
+    □ #8 Outcome 8

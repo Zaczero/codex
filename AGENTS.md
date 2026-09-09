@@ -15,6 +15,32 @@ rewrite; publish authorized updates with an explicit
 `--force-with-lease=<branch>:<observed-remote-sha>`, never an unconditional force
 push. This history policy does not itself authorize publication.
 
+## Fork workflow contracts
+
+Prefer user configuration to fork-specific feature removal. When using the ledger,
+disable goals and `tools.update_plan` in `~/.codex/config.toml`.
+
+### Ledger
+
+- Task changes clear a pause; reads and recall do not. Completion checks use
+  executable work, ownership, and external waits, not timestamps or task counts.
+- Activation and named recall return complete bodies and findings across numbered
+  pages. Read every page before working; restart at page 1 if the records change.
+  Routine snapshots limit displayed context without truncating stored evidence.
+- New root sessions start with parallelism off. `/parallelism [N]` reads or changes
+  that session's persisted setting immediately. Zero disables limits and completion
+  reminders while preserving storage and context. Children derive zero or one from
+  their root on each ledger access; World State reports changes on the next step.
+- `/tasks` displays all unfinished tasks, excluding done and cancelled rows.
+  Its pager reflows full bodies and findings as Markdown; the inline card stays bounded.
+
+### Shared hooks
+
+Keep hook scripts and registrations in the global NixOS configuration, shared with
+Claude Code where supported. Codex is primary. Use native code for capabilities
+hooks cannot provide. Restoration must inspect what survived compaction rather
+than assume a particular compaction implementation retains hook text.
+
 In the codex-rs folder where the rust code lives:
 
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
@@ -109,6 +135,10 @@ existing build directory is shared across these invocations.
 Run tests with `RUST_MIN_STACK=8388608`, as CI does: debug test threads
 otherwise overflow their stack in many `codex-core` unit tests, which aborts
 them rather than failing them.
+
+`just bazel-lock-update` expects a `bazel` binary; the Nix package is
+`bazelisk`, so refresh the lock with `bazelisk mod deps --lockfile_mode=update`
+from the repository root after a `Cargo.lock` change.
 
 Cargo can place standalone helper binaries in `target/debug` while nextest uses
 the centralized build directory. For Guardian integration tests, build
@@ -278,11 +308,11 @@ When UI or text output changes intentionally, update the snapshots as follows:
 - Run tests to generate any updated snapshots:
   - `just test -p codex-tui`
 - Check what’s pending:
-  - `cargo insta pending-snapshots -p codex-tui`
+  - `cargo insta pending-snapshots --manifest-path tui/Cargo.toml`
 - Review changes by reading the generated `*.snap.new` files directly in the repo, or preview a specific file:
-  - `cargo insta show -p codex-tui path/to/file.snap.new`
+  - `cargo insta show --manifest-path tui/Cargo.toml path/to/file.snap.new`
 - Only if you intend to accept all new snapshots in this crate, run:
-  - `cargo insta accept -p codex-tui`
+  - `cargo insta accept --manifest-path tui/Cargo.toml`
 
 If you don’t have the tool:
 

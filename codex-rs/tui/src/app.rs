@@ -250,6 +250,7 @@ mod side;
 mod startup;
 mod startup_prompts;
 mod startup_warnings;
+mod tasks;
 mod thread_event_buffer;
 mod thread_events;
 mod thread_goal_actions;

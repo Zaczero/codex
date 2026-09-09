@@ -613,6 +613,16 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadSetNameResponse,
     },
+    ThreadTaskParallelism => "thread/tasks/parallelism" {
+        params: v2::ThreadTaskParallelismParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadTaskParallelismResponse,
+    },
+    ThreadTasksRead => "thread/tasks/read" {
+        params: v2::ThreadTasksReadParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadTasksReadResponse,
+    },
     ThreadGoalSet => "thread/goal/set" {
         params: v2::ThreadGoalSetParams,
         serialization: thread_id(params.thread_id),

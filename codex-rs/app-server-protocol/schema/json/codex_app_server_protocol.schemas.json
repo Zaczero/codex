@@ -403,6 +403,54 @@
             },
             "method": {
               "enum": [
+                "thread/tasks/parallelism"
+              ],
+              "title": "Thread/tasks/parallelismRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadTaskParallelismParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/tasks/parallelismRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/tasks/read"
+              ],
+              "title": "Thread/tasks/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadTasksReadParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/tasks/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/goal/set"
               ],
               "title": "Thread/goal/setRequestMethod",
@@ -24228,6 +24276,70 @@
           "threadId"
         ],
         "title": "ThreadStatusChangedNotification",
+        "type": "object"
+      },
+      "ThreadTaskParallelismParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "parallelism": {
+            "description": "Set this session's task capacity immediately. Omit or use null to read it. Zero disables capacity limits and completion reminders.",
+            "format": "uint",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadTaskParallelismParams",
+        "type": "object"
+      },
+      "ThreadTaskParallelismResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "parallelism": {
+            "format": "uint",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "parallelism"
+        ],
+        "title": "ThreadTaskParallelismResponse",
+        "type": "object"
+      },
+      "ThreadTasksReadParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadTasksReadParams",
+        "type": "object"
+      },
+      "ThreadTasksReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "text": {
+            "description": "Human-readable snapshot of every unfinished task with its complete details. Completed and cancelled task rows are excluded.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "ThreadTasksReadResponse",
         "type": "object"
       },
       "ThreadTimelineEntry": {

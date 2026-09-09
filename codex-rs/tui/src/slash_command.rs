@@ -43,6 +43,8 @@ pub enum SlashCommand {
     Plan,
     Voice,
     Goal,
+    Parallelism,
+    Tasks,
     Agents,
     Side,
     Btw,
@@ -135,6 +137,8 @@ impl SlashCommand {
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Voice => "start or stop a live voice conversation",
             SlashCommand::Goal => "set or view the goal for a long-running task",
+            SlashCommand::Parallelism => "set this session's task capacity; 0 disables limits",
+            SlashCommand::Tasks => "view all unfinished tasks and their details",
             SlashCommand::Agents => "view and switch between all active agent sessions",
             SlashCommand::MultiAgents => "switch between this session's subagents",
             SlashCommand::Side | SlashCommand::Btw => {
@@ -176,6 +180,7 @@ impl SlashCommand {
                 | SlashCommand::Fork
                 | SlashCommand::Plan
                 | SlashCommand::Goal
+                | SlashCommand::Parallelism
                 | SlashCommand::Voice
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
@@ -256,6 +261,8 @@ impl SlashCommand {
             | SlashCommand::Stop
             | SlashCommand::App
             | SlashCommand::Goal
+            | SlashCommand::Parallelism
+            | SlashCommand::Tasks
             | SlashCommand::Voice
             | SlashCommand::Mcp
             | SlashCommand::Apps

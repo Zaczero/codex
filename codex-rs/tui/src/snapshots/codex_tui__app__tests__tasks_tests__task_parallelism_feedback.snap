@@ -1,0 +1,8 @@
+---
+source: tui/src/app/tests/tasks_tests.rs
+expression: feedback
+---
+• Task parallelism is off for this session.
+• Task parallelism is 3 slots for this session.
+• Task parallelism is 3 slots for this session.
+• Task parallelism is off for this session.

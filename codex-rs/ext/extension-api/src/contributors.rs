@@ -185,6 +185,14 @@ pub trait ThreadLifecycleContributor<C: Sync>: Send + Sync {
 /// extension-private turn state. The host exposes stable identifiers and
 /// extension stores instead of core runtime objects.
 pub trait TurnLifecycleContributor: Send + Sync {
+    /// Called when the model attempts to finish. A reason asks it to continue in the same turn.
+    /// The host bounds the injected text; implementations own their enforcement state.
+    fn on_completion_attempt<'a>(
+        &'a self,
+        _input: TurnStopInput<'a>,
+    ) -> ExtensionFuture<'a, Option<String>> {
+        Box::pin(std::future::ready(None))
+    }
     /// Called after turn-scoped extension stores are created, before the task
     /// for the turn starts running.
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {

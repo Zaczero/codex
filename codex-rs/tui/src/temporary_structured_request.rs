@@ -65,6 +65,7 @@ pub(crate) async fn start_temporary_thread(
         ("features.deferred_executor".to_string(), false.into()),
         ("features.enable_fanout".to_string(), false.into()),
         ("features.goals".to_string(), false.into()),
+        ("features.tasks".to_string(), false.into()),
         ("features.hooks".to_string(), false.into()),
         ("features.image_generation".to_string(), false.into()),
         ("features.memories".to_string(), false.into()),

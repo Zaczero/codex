@@ -1393,6 +1393,12 @@ impl App {
             AppEvent::RefreshStatusLineWorkspaceHeadline { request_id } => {
                 self.refresh_status_line_workspace_headline(app_server, request_id);
             }
+            AppEvent::TaskParallelism { thread_id, parallelism } => {
+                self.task_parallelism(app_server, thread_id, parallelism).await;
+            }
+            AppEvent::OpenTasks { thread_id } => {
+                self.open_tasks(tui, app_server, thread_id).await;
+            }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
             }

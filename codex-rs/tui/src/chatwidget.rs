@@ -366,6 +366,7 @@ mod hooks;
 mod interaction;
 mod skills;
 mod slash_dispatch;
+mod task_parallelism;
 mod worktree_picker;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
