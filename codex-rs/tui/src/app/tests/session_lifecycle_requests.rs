@@ -3934,7 +3934,7 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                     .await?;
                 app.enqueue_primary_thread_session(root.session, root.turns)
                     .await?;
-                app_server
+                let child = app_server
                     .resume_thread(
                         &app.local_settings,
                         app.config.clone(),
@@ -3942,6 +3942,10 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                         app.resume_model_settings(),
                     )
                     .await?;
+                let child_routing = codex_app_server_protocol::SubAgentRouting {
+                    model: child.session.model.clone(),
+                    reasoning_effort: child.session.reasoning_effort.clone(),
+                };
                 let mut tui = crate::tui::test_support::make_test_tui()?;
                 take_backfill_counts(&requests);
 
@@ -4048,6 +4052,7 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                 assert_eq!(
                     app.agent_navigation.get(&child_thread_id),
                     Some(&AgentPickerThreadEntry {
+                        routing: Some(child_routing),
                         agent_nickname: Some("worker".to_string()),
                         agent_role: Some("worker".to_string()),
                         agent_path: Some("/root/worker".to_string()),
@@ -4067,18 +4072,18 @@ fn session_lifecycle_avoids_redundant_subagent_metadata_reads() -> Result<()> {
                     .expect("opening the agent picker waited for the app server");
                 drop(child_store_guard);
                 insta::assert_snapshot!(
-                    render_bottom_popup(&app.chat_widget, /*width*/ 80)
+                    render_bottom_popup(&app.chat_widget, /*width*/ 120)
                         .replace(&root_thread_id.to_string(), "[root]")
                         .replace(&child_thread_id.to_string(), "[child]"),
-                    @r###"
-                      Subagents
-                      Select an agent to watch. ⌥ + ← previous, ⌥ + → next.
+                    @"
+                  Subagents
+                  Select an agent to watch. ⌥ + ← previous, ⌥ + → next.
 
-                    › 1. • Main [default] (current)  [root]
-                      2. • /root/worker              [child]
+                › 1. • Main [default] (current)  gpt-6-astra · effort unspecified · [root]
+                  2. • /root/worker              gpt-6-astra · effort unspecified · [child]
 
-                      Press enter to confirm or esc to go back
-                    "###
+                  Press enter to confirm or esc to go back
+                "
                 );
                 assert_eq!(take_backfill_counts(&requests), (0, 0));
                 tokio::time::timeout(Duration::from_secs(5), started_rx).await??;

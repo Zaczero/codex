@@ -546,6 +546,28 @@ pub(super) async fn submission_loop(
                     interrupt(&sess).await;
                     false
                 }
+                Op::InterruptAndWait { reply } => {
+                    interrupt(&sess).await;
+                    let _ = reply.send(());
+                    false
+                }
+                Op::RerouteAgent {
+                    communication,
+                    start_options,
+                    thread_settings,
+                    reply,
+                } => {
+                    let result = super::agent_routing::reroute(
+                        &sess,
+                        sub.id.clone(),
+                        communication,
+                        start_options,
+                        thread_settings,
+                    )
+                    .await;
+                    let _ = reply.send(result);
+                    false
+                }
                 Op::CleanBackgroundTerminals => {
                     clean_background_terminals(&sess).await;
                     false

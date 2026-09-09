@@ -106,6 +106,10 @@ nix develop --impure --expr '
 Use the same environment for `just fix -p codex-login` and `just fmt`. Cargo's
 existing build directory is shared across these invocations.
 
+Run tests with `RUST_MIN_STACK=8388608`, as CI does: debug test threads
+otherwise overflow their stack in many `codex-core` unit tests, which aborts
+them rather than failing them.
+
 Cargo can place standalone helper binaries in `target/debug` while nextest uses
 the centralized build directory. For Guardian integration tests, build
 `cargo build -p codex-rmcp-client --bin test_stdio_server` from `codex-rs`, then

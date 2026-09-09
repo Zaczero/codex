@@ -1,10 +1,12 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
+use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::SubAgentActivityKind;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
@@ -198,6 +200,55 @@ impl EventProcessorWithHumanOutput {
             }
             ThreadItem::WebSearch(item) => {
                 eprintln!("{} {}", "web search:".style(self.bold), item.query);
+            }
+            ThreadItem::CollabAgentToolCall {
+                tool,
+                status,
+                model,
+                reasoning_effort,
+                ..
+            } => {
+                let status_text = match status {
+                    CollabAgentToolCallStatus::Completed => "completed".style(self.green),
+                    CollabAgentToolCallStatus::Failed => "failed".style(self.red),
+                    CollabAgentToolCallStatus::Interrupted => "interrupted".style(self.dimmed),
+                    CollabAgentToolCallStatus::InProgress => "in_progress".style(self.dimmed),
+                };
+                let routing = match (model, reasoning_effort) {
+                    (Some(model), Some(effort)) => format!(" · {model} {effort}"),
+                    (Some(model), None) => format!(" · {model} · effort unspecified"),
+                    (None, _) => String::new(),
+                };
+                eprintln!(
+                    "{} {tool:?} {}",
+                    "collab:".style(self.bold),
+                    format!("({status_text}{routing})").style(self.dimmed)
+                );
+            }
+            ThreadItem::SubAgentActivity {
+                kind,
+                agent_path,
+                routing,
+                ..
+            } => {
+                let action = match kind {
+                    SubAgentActivityKind::Started => "started",
+                    SubAgentActivityKind::Interacted => "interacted with",
+                    SubAgentActivityKind::Interrupted => "interrupted",
+                    SubAgentActivityKind::Completed => "completed",
+                };
+                let routing = match routing {
+                    Some(routing) => match routing.reasoning_effort {
+                        Some(effort) => format!("{} {effort}", routing.model),
+                        None => format!("{} effort unspecified", routing.model),
+                    },
+                    None => "model/effort unavailable".to_string(),
+                };
+                eprintln!(
+                    "{} {action} {agent_path} {}",
+                    "agent:".style(self.bold),
+                    format!("({routing})").style(self.dimmed)
+                );
             }
             ThreadItem::ContextCompaction { .. } => {
                 eprintln!("{}", "context compacted".style(self.dimmed));

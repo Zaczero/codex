@@ -674,9 +674,7 @@ fn required_child_management_tool_names(
             &["send_input", "wait_agent", "resume_agent", "close_agent"],
         ),
         MultiAgentVersion::V2 => (
-            namespace_tools_enabled(turn_context)
-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
-                .flatten(),
+            turn_context.multi_agent_v2_tool_namespace(),
             &[
                 "send_message",
                 "followup_task",
@@ -1155,7 +1153,11 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         );
     }
 
-    if turn_context.config.experimental_request_user_input_enabled {
+    // Questions belong to the root: a child returns a blocker to its parent through agent
+    // messaging instead of stalling on a prompt the handler would reject anyway.
+    if turn_context.config.experimental_request_user_input_enabled
+        && !turn_context.session_source.is_non_root_agent()
+    {
         registry.add_with_exposure(
             RequestUserInputHandler {
                 available_modes: request_user_input_available_modes(features),
@@ -1291,27 +1293,26 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
             } else {
                 ToolExposure::Direct
             };
-            let tool_namespace = namespace_tools_enabled(turn_context)
-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
-                .flatten();
+            let tool_namespace = turn_context.multi_agent_v2_tool_namespace();
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
                 turn_context.config.multi_agent_v2.hide_spawn_agent_metadata;
+            let spawn_options = SpawnAgentToolOptions {
+                available_models: turn_context.available_models.clone(),
+                agent_type_description,
+                expose_agent_type: !turn_context.config.agent_roles.is_empty(),
+                hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
+                expose_spawn_agent_model_overrides: turn_context
+                    .config
+                    .multi_agent_v2
+                    .expose_spawn_agent_model_overrides,
+                multi_agent_version: turn_context.multi_agent_version,
+                usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
+            };
             registry.register_trusted_with_exposure(
                 multi_agent_v2_handler(
-                    SpawnAgentHandlerV2::new(SpawnAgentToolOptions {
-                        available_models: turn_context.available_models.clone(),
-                        agent_type_description,
-                        expose_agent_type: !turn_context.config.agent_roles.is_empty(),
-                        hide_agent_type_model_reasoning: hide_spawn_agent_metadata,
-                        expose_spawn_agent_model_overrides: turn_context
-                            .config
-                            .multi_agent_v2
-                            .expose_spawn_agent_model_overrides,
-                        multi_agent_version: turn_context.multi_agent_version,
-                        usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
-                    }),
+                    SpawnAgentHandlerV2::new(spawn_options.clone()),
                     tool_namespace,
                 ),
                 exposure,
@@ -1321,7 +1322,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, registry: &mut Too
                 exposure,
             );
             registry.register_trusted_with_exposure(
-                multi_agent_v2_handler(FollowupTaskHandlerV2, tool_namespace),
+                multi_agent_v2_handler(FollowupTaskHandlerV2::new(spawn_options), tool_namespace),
                 exposure,
             );
             if turn_context.config.multi_agent_v2.wait_agent_enabled {

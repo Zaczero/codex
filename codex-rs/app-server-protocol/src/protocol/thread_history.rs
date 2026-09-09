@@ -891,8 +891,15 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: Vec::new(),
             prompt: Some(payload.prompt.clone()),
-            model: Some(payload.model.clone()),
-            reasoning_effort: Some(payload.reasoning_effort.clone()),
+            model: payload
+                .routing
+                .as_ref()
+                .map(|routing| routing.model.clone())
+                .or_else(|| (!payload.model.is_empty()).then(|| payload.model.clone())),
+            reasoning_effort: match &payload.routing {
+                Some(routing) => routing.reasoning_effort.clone(),
+                None => (!payload.model.is_empty()).then(|| payload.reasoning_effort.clone()),
+            },
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -911,7 +918,8 @@ impl ThreadHistoryBuilder {
         let (receiver_thread_ids, agents_states) = match &payload.new_thread_id {
             Some(id) => {
                 let receiver_id = id.to_string();
-                let received_status = CollabAgentState::from(payload.status.clone());
+                let received_status =
+                    CollabAgentState::with_routing(payload.status.clone(), payload.routing.clone());
                 (
                     vec![receiver_id.clone()],
                     [(receiver_id, received_status)].into_iter().collect(),
@@ -926,8 +934,15 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids,
             prompt: Some(payload.prompt.clone()),
-            model: Some(payload.model.clone()),
-            reasoning_effort: Some(payload.reasoning_effort.clone()),
+            model: payload
+                .routing
+                .as_ref()
+                .map(|routing| routing.model.clone())
+                .or_else(|| (!payload.model.is_empty()).then(|| payload.model.clone())),
+            reasoning_effort: match &payload.routing {
+                Some(routing) => routing.reasoning_effort.clone(),
+                None => (!payload.model.is_empty()).then(|| payload.reasoning_effort.clone()),
+            },
             agents_states,
         });
     }
@@ -943,8 +958,14 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![payload.receiver_thread_id.to_string()],
             prompt: Some(payload.prompt.clone()),
-            model: None,
-            reasoning_effort: None,
+            model: payload
+                .routing
+                .as_ref()
+                .map(|routing| routing.model.clone()),
+            reasoning_effort: payload
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.reasoning_effort.clone()),
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -959,7 +980,8 @@ impl ThreadHistoryBuilder {
             _ => CollabAgentToolCallStatus::Completed,
         };
         let receiver_id = payload.receiver_thread_id.to_string();
-        let received_status = CollabAgentState::from(payload.status.clone());
+        let received_status =
+            CollabAgentState::with_routing(payload.status.clone(), payload.routing.clone());
         self.upsert_item_in_current_turn(ThreadItem::CollabAgentToolCall {
             id: payload.call_id.clone(),
             tool: CollabAgentTool::SendInput,
@@ -967,8 +989,14 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id.clone()],
             prompt: Some(payload.prompt.clone()),
-            model: None,
-            reasoning_effort: None,
+            model: payload
+                .routing
+                .as_ref()
+                .map(|routing| routing.model.clone()),
+            reasoning_effort: payload
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.reasoning_effort.clone()),
             agents_states: [(receiver_id, received_status)].into_iter().collect(),
         });
     }
@@ -982,6 +1010,7 @@ impl ThreadHistoryBuilder {
             kind: payload.kind.into(),
             agent_thread_id: payload.agent_thread_id.to_string(),
             agent_path: String::from(payload.agent_path.clone()),
+            routing: payload.routing.clone().map(Into::into),
         });
     }
 
@@ -1002,7 +1031,21 @@ impl ThreadHistoryBuilder {
             prompt: None,
             model: None,
             reasoning_effort: None,
-            agents_states: HashMap::new(),
+            agents_states: payload
+                .statuses
+                .iter()
+                .map(|(id, status)| {
+                    let routing = payload
+                        .receiver_agents
+                        .iter()
+                        .find(|agent| agent.thread_id == *id)
+                        .and_then(|agent| agent.routing.clone());
+                    (
+                        id.to_string(),
+                        CollabAgentState::with_routing(status.clone(), routing),
+                    )
+                })
+                .collect(),
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -1026,7 +1069,17 @@ impl ThreadHistoryBuilder {
         let agents_states = payload
             .statuses
             .iter()
-            .map(|(id, status)| (id.to_string(), CollabAgentState::from(status.clone())))
+            .map(|(id, status)| {
+                let routing = payload
+                    .agent_statuses
+                    .iter()
+                    .find(|agent| agent.thread_id == *id)
+                    .and_then(|agent| agent.routing.clone());
+                (
+                    id.to_string(),
+                    CollabAgentState::with_routing(status.clone(), routing),
+                )
+            })
             .collect();
         self.upsert_item_in_current_turn(ThreadItem::CollabAgentToolCall {
             id: payload.call_id.clone(),
@@ -1052,8 +1105,14 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![payload.receiver_thread_id.to_string()],
             prompt: None,
-            model: None,
-            reasoning_effort: None,
+            model: payload
+                .routing
+                .as_ref()
+                .map(|routing| routing.model.clone()),
+            reasoning_effort: payload
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.reasoning_effort.clone()),
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -1067,7 +1126,7 @@ impl ThreadHistoryBuilder {
         let receiver_id = payload.receiver_thread_id.to_string();
         let agents_states = [(
             receiver_id.clone(),
-            CollabAgentState::from(payload.status.clone()),
+            CollabAgentState::with_routing(payload.status.clone(), payload.routing.clone()),
         )]
         .into_iter()
         .collect();
@@ -1078,8 +1137,14 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id],
             prompt: None,
-            model: None,
-            reasoning_effort: None,
+            model: payload
+                .routing
+                .as_ref()
+                .map(|routing| routing.model.clone()),
+            reasoning_effort: payload
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.reasoning_effort.clone()),
             agents_states,
         });
     }
@@ -1095,8 +1160,14 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![payload.receiver_thread_id.to_string()],
             prompt: None,
-            model: None,
-            reasoning_effort: None,
+            model: payload
+                .routing
+                .as_ref()
+                .map(|routing| routing.model.clone()),
+            reasoning_effort: payload
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.reasoning_effort.clone()),
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -1113,7 +1184,7 @@ impl ThreadHistoryBuilder {
         let receiver_id = payload.receiver_thread_id.to_string();
         let agents_states = [(
             receiver_id.clone(),
-            CollabAgentState::from(payload.status.clone()),
+            CollabAgentState::with_routing(payload.status.clone(), payload.routing.clone()),
         )]
         .into_iter()
         .collect();
@@ -1124,8 +1195,14 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id],
             prompt: None,
-            model: None,
-            reasoning_effort: None,
+            model: payload
+                .routing
+                .as_ref()
+                .map(|routing| routing.model.clone()),
+            reasoning_effort: payload
+                .routing
+                .as_ref()
+                .and_then(|routing| routing.reasoning_effort.clone()),
             agents_states,
         });
     }
@@ -4146,6 +4223,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::CollabResumeEnd(codex_protocol::protocol::CollabResumeEndEvent {
+                routing: None,
                 call_id: "resume-1".into(),
                 completed_at_ms: 0,
                 sender_thread_id: ThreadId::try_from("00000000-0000-0000-0000-000000000001")
@@ -4179,6 +4257,7 @@ mod tests {
                 agents_states: [(
                     "00000000-0000-0000-0000-000000000002".into(),
                     CollabAgentState {
+                        routing: None,
                         status: crate::protocol::v2::CollabAgentStatus::Completed,
                         message: None,
                     },
@@ -4205,6 +4284,7 @@ mod tests {
                 ..Default::default()
             }),
             EventMsg::CollabAgentSpawnEnd(codex_protocol::protocol::CollabAgentSpawnEndEvent {
+                routing: None,
                 call_id: "spawn-1".into(),
                 completed_at_ms: 0,
                 sender_thread_id,
@@ -4239,6 +4319,7 @@ mod tests {
                 agents_states: [(
                     "00000000-0000-0000-0000-000000000002".into(),
                     CollabAgentState {
+                        routing: None,
                         status: crate::protocol::v2::CollabAgentStatus::Running,
                         message: None,
                     },
@@ -4269,6 +4350,7 @@ mod tests {
             }),
             EventMsg::CollabAgentInteractionBegin(
                 codex_protocol::protocol::CollabAgentInteractionBeginEvent {
+                    routing: None,
                     call_id: "send-1".into(),
                     started_at_ms: 0,
                     sender_thread_id: sender,
@@ -4278,6 +4360,7 @@ mod tests {
             ),
             EventMsg::CollabAgentInteractionEnd(
                 codex_protocol::protocol::CollabAgentInteractionEndEvent {
+                    routing: None,
                     call_id: "send-1".into(),
                     completed_at_ms: 0,
                     sender_thread_id: sender,
@@ -4311,6 +4394,7 @@ mod tests {
                 agents_states: [(
                     receiver.to_string(),
                     CollabAgentState {
+                        routing: None,
                         status: crate::protocol::v2::CollabAgentStatus::Interrupted,
                         message: None,
                     },
@@ -4662,6 +4746,7 @@ mod tests {
                     kind: CoreSubAgentActivityKind::Completed,
                     agent_thread_id: child_thread_id,
                     agent_path: child_path,
+                    routing: None,
                 }),
                 started_at_ms: None,
                 completed_at_ms: 0,
@@ -4678,6 +4763,7 @@ mod tests {
                 kind: crate::protocol::v2::SubAgentActivityKind::Completed,
                 agent_thread_id: child_thread_id.to_string(),
                 agent_path: "/root/worker".into(),
+                routing: None,
             }]
         );
     }

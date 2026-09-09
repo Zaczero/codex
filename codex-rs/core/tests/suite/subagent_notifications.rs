@@ -10,6 +10,7 @@ use codex_models_manager::bundled_models_response;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::items::SubAgentActivityItem;
+use codex_protocol::items::SubAgentRouting;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::MultiAgentMessages;
@@ -74,7 +75,7 @@ use wiremock::matchers::path;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
-const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const MULTI_AGENT_V2_NAMESPACE: &str = "codex_agents";
 const TURN_0_FORK_PROMPT: &str = "seed fork context";
 const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
@@ -400,24 +401,6 @@ async fn wait_for_request_with_model(
         }
         sleep(Duration::from_millis(10)).await;
     }
-}
-
-async fn setup_turn_one_with_spawned_child(
-    server: &MockServer,
-    child_response_delay: Option<Duration>,
-) -> Result<(TestCodex, String)> {
-    let (test, spawned_id, _child_request_log) = setup_turn_one_with_custom_spawned_child(
-        server,
-        json!({
-            "message": CHILD_PROMPT,
-        }),
-        child_response_delay,
-        /*wait_for_parent_notification*/ true,
-        INHERITED_REASONING_EFFORT,
-        |builder| builder,
-    )
-    .await?;
-    Ok((test, spawned_id))
 }
 
 async fn setup_turn_one_with_custom_spawned_child(
@@ -933,8 +916,14 @@ async fn subagent_notification_is_included_without_wait() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let (test, _spawned_id) =
-        setup_turn_one_with_spawned_child(&server, /*child_response_delay*/ None).await?;
+    let (test, spawned_id, child_requests) = setup_turn_one_with_custom_spawned_child(
+        &server,
+        json!({"message": CHILD_PROMPT, "model": REQUESTED_MODEL, "reasoning_effort": REQUESTED_REASONING_EFFORT}),
+        /*child_response_delay*/ None,
+        /*wait_for_parent_notification*/ true,
+        INHERITED_REASONING_EFFORT,
+        |builder| builder,
+    ).await?;
 
     let turn2 = mount_sse_once_match(
         &server,
@@ -953,6 +942,27 @@ async fn subagent_notification_is_included_without_wait() -> Result<()> {
         turn2_requests
             .iter()
             .any(|request| request.has_content_kinds(&["multi_agent.subagent_notification"]))
+    );
+    let notification = turn2_requests
+        .iter()
+        .flat_map(|request| request.message_input_texts("user"))
+        .find_map(|text| {
+            text.split_once("<subagent_notification>")
+                .and_then(|(_, rest)| rest.split_once("</subagent_notification>"))
+                .map(|(body, _)| serde_json::from_str::<Value>(body).expect("notification JSON"))
+        })
+        .expect("parent request includes child's completion");
+    let child = child_requests
+        .last_request()
+        .expect("child request log should capture at least one request")
+        .body_json();
+    assert_eq!(
+        notification,
+        json!({
+            "agent_path": spawned_id,
+            "status": {"completed": "child done"},
+            "routing": {"model": child["model"], "reasoning_effort": child["reasoning"]["effort"]},
+        })
     );
 
     Ok(())
@@ -2394,9 +2404,6 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
             error,
         ),
     };
-    let notification = format!(
-        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\n{payload}"
-    );
     // If the child is still running when the parent turn starts, wait_agent blocks
     // until mailbox delivery. The follow-up request must then contain that delivery.
     mount_sse_once_match(
@@ -2472,6 +2479,26 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
         );
         sleep(Duration::from_millis(10)).await;
     };
+    // The completion message reports the route the child actually ran with, so read it
+    // from the child's own model request instead of the parent's configuration.
+    let child_routing: SubAgentRouting = {
+        let child_body = child_request.body_json();
+        SubAgentRouting {
+            model: child_body["model"]
+                .as_str()
+                .expect("child request model")
+                .to_string(),
+            reasoning_effort: serde_json::from_value(child_body["reasoning"]["effort"].clone())?,
+        }
+    };
+    let child_effort = child_routing
+        .reasoning_effort
+        .as_ref()
+        .map_or("unspecified".to_string(), ToString::to_string);
+    let notification = format!(
+        "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nModel: {}\nReasoning effort: {child_effort}\nPayload:\n{payload}",
+        child_routing.model
+    );
     let expected_completed_activity = if matches!(scenario, CompletionScenario::Completed) {
         let child_body = child_request.body_json();
         let parent_turn_id = child_turn_metadata["parent_turn_id"]
@@ -2638,6 +2665,7 @@ async fn plaintext_multi_agent_v2_completion_sends_agent_message(
                 agent_path: codex_protocol::AgentPath::root()
                     .join("worker")
                     .expect("worker path"),
+                routing: Some(child_routing),
             }
         );
     } else {
@@ -2843,7 +2871,10 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
     let followup_output = collaboration_responses[1]
         .function_call_output_text(FOLLOWUP_CALL_ID)
         .expect("requester follow-up tool output");
-    assert_eq!(followup_output, "");
+    assert_eq!(
+        followup_output,
+        r#"{"model":"gpt-5.6-sol","reasoning_effort":"low","interrupted":false}"#
+    );
     wait_for_event(worker_thread.as_ref(), |event| {
         matches!(event, EventMsg::TurnComplete(_))
     })
@@ -2896,6 +2927,10 @@ async fn multi_agent_v2_peer_followup_completion_notifies_initiating_turn() -> R
                 agent_path: codex_protocol::AgentPath::root()
                     .join("worker")
                     .expect("worker path"),
+                routing: Some(SubAgentRouting {
+                    model: "gpt-5.6-sol".to_string(),
+                    reasoning_effort: Some(ReasoningEffort::Low),
+                }),
             },
         )
     );

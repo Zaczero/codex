@@ -1,3 +1,4 @@
+use codex_protocol::items::SubAgentRouting;
 use codex_protocol::models::ContentItemKind;
 use codex_protocol::protocol::AgentStatus;
 
@@ -7,13 +8,19 @@ use super::ContextualUserFragment;
 pub(crate) struct SubagentNotification {
     pub(crate) agent_reference: String,
     pub(crate) status: AgentStatus,
+    pub(crate) routing: Option<SubAgentRouting>,
 }
 
 impl SubagentNotification {
-    pub(crate) fn new(agent_reference: impl Into<String>, status: AgentStatus) -> Self {
+    pub(crate) fn new(
+        agent_reference: impl Into<String>,
+        status: AgentStatus,
+        routing: Option<SubAgentRouting>,
+    ) -> Self {
         Self {
             agent_reference: agent_reference.into(),
             status,
+            routing,
         }
     }
 }
@@ -41,6 +48,7 @@ impl ContextualUserFragment for SubagentNotification {
             serde_json::json!({
                 "agent_path": &self.agent_reference,
                 "status": &self.status,
+                "routing": &self.routing,
             })
         )
     }

@@ -1,0 +1,10 @@
+---
+source: tui/src/app/tests/agent_routing_tests.rs
+expression: "render_bottom_popup(&app.chat_widget, 100)"
+---
+  Subagents
+  Select an agent to watch. ⌥ + ← previous, ⌥ + → next.
+
+› 1. • /root/reviewer  gpt-5.6-sol high · 01940000-0000-7000-8000-000000000001
+
+  Press enter to confirm or esc to go back

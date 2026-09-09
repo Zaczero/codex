@@ -12,8 +12,10 @@ use codex_app_server_protocol::CollabAgentStatus;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::CollabAgentToolCallStatus;
 use codex_app_server_protocol::SubAgentActivityKind;
+use codex_app_server_protocol::SubAgentRouting;
 use codex_app_server_protocol::ThreadItem;
 use codex_protocol::ThreadId;
+#[cfg(test)]
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -30,7 +32,7 @@ const COLLAB_PROMPT_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_ERROR_PREVIEW_GRAPHEMES: usize = 160;
 const COLLAB_AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AgentPickerThreadEntry {
     /// Human-friendly nickname shown in picker rows and footer labels.
     pub(crate) agent_nickname: Option<String>,
@@ -38,6 +40,8 @@ pub(crate) struct AgentPickerThreadEntry {
     pub(crate) agent_role: Option<String>,
     /// Canonical v2 agent path, when the thread was observed through v2 activity.
     pub(crate) agent_path: Option<String>,
+    /// Model and effort last observed for the thread, from activity or a thread read.
+    pub(crate) routing: Option<SubAgentRouting>,
     /// Whether the latest liveness refresh says the agent thread is actively working.
     pub(crate) is_running: bool,
     /// Whether the thread has emitted a close event and should render dimmed.
@@ -48,7 +52,8 @@ pub(crate) struct AgentPickerThreadEntry {
 pub(crate) struct SubAgentActivityDisplay {
     pub(crate) thread_id: ThreadId,
     pub(crate) agent_path: String,
-    pub(crate) is_running_hint: bool,
+    pub(crate) is_running_hint: Option<bool>,
+    pub(crate) routing: Option<SubAgentRouting>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,12 +69,6 @@ struct AgentLabel<'a> {
     thread_id: Option<ThreadId>,
     nickname: Option<&'a str>,
     role: Option<&'a str>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SpawnRequestSummary {
-    pub(crate) model: String,
-    pub(crate) reasoning_effort: ReasoningEffortConfig,
 }
 
 pub(crate) fn agent_picker_status_dot_spans(is_closed: bool) -> Vec<Span<'static>> {
@@ -185,24 +184,8 @@ fn next_agent_word_motion_fallback(
     false
 }
 
-pub(crate) fn spawn_request_summary(item: &ThreadItem) -> Option<SpawnRequestSummary> {
-    match item {
-        ThreadItem::CollabAgentToolCall {
-            tool: CollabAgentTool::SpawnAgent,
-            model: Some(model),
-            reasoning_effort: Some(reasoning_effort),
-            ..
-        } => Some(SpawnRequestSummary {
-            model: model.clone(),
-            reasoning_effort: reasoning_effort.clone(),
-        }),
-        _ => None,
-    }
-}
-
 pub(crate) fn tool_call_history_cell(
     item: &ThreadItem,
-    cached_spawn_request: Option<&SpawnRequestSummary>,
     mut agent_metadata: impl FnMut(ThreadId) -> AgentMetadata,
 ) -> Option<PlainHistoryCell> {
     let ThreadItem::CollabAgentToolCall {
@@ -210,6 +193,8 @@ pub(crate) fn tool_call_history_cell(
         status,
         receiver_thread_ids,
         prompt,
+        model,
+        reasoning_effort,
         agents_states,
         ..
     } = item
@@ -221,6 +206,10 @@ pub(crate) fn tool_call_history_cell(
         .first()
         .and_then(|id| parse_thread_id(id));
     let prompt = prompt.as_deref().unwrap_or_default();
+    let routing = model.as_ref().map(|model| SubAgentRouting {
+        model: model.clone(),
+        reasoning_effort: reasoning_effort.clone(),
+    });
 
     match tool {
         // V2 uses SubAgentActivity for display; these variants are analytics-only.
@@ -232,12 +221,10 @@ pub(crate) fn tool_call_history_cell(
             if matches!(status, CollabAgentToolCallStatus::InProgress) {
                 return None;
             }
-            let fallback_spawn_request = spawn_request_summary(item);
-            let spawn_request = cached_spawn_request.or(fallback_spawn_request.as_ref());
             Some(spawn_end(
                 first_receiver,
                 prompt,
-                spawn_request,
+                routing.as_ref(),
                 &mut agent_metadata,
             ))
         }
@@ -246,25 +233,35 @@ pub(crate) fn tool_call_history_cell(
                 return None;
             }
             first_receiver.map(|receiver_thread_id| {
-                interaction_end(receiver_thread_id, prompt, &mut agent_metadata)
+                interaction_end(
+                    receiver_thread_id,
+                    prompt,
+                    routing.as_ref(),
+                    &mut agent_metadata,
+                )
             })
         }
         CollabAgentTool::ResumeAgent => first_receiver.map(|receiver_thread_id| {
             if matches!(status, CollabAgentToolCallStatus::InProgress) {
-                resume_begin(receiver_thread_id, &mut agent_metadata)
+                resume_begin(receiver_thread_id, routing.as_ref(), &mut agent_metadata)
             } else {
                 let state = first_agent_state(receiver_thread_ids, agents_states);
                 resume_end(
                     receiver_thread_id,
                     state,
                     "Agent resume failed",
+                    routing.as_ref(),
                     &mut agent_metadata,
                 )
             }
         }),
         CollabAgentTool::Wait => {
             if matches!(status, CollabAgentToolCallStatus::InProgress) {
-                Some(waiting_begin(receiver_thread_ids, &mut agent_metadata))
+                Some(waiting_begin(
+                    receiver_thread_ids,
+                    agents_states,
+                    &mut agent_metadata,
+                ))
             } else {
                 Some(waiting_end(
                     receiver_thread_ids,
@@ -277,8 +274,9 @@ pub(crate) fn tool_call_history_cell(
             if matches!(status, CollabAgentToolCallStatus::InProgress) {
                 return None;
             }
-            first_receiver
-                .map(|receiver_thread_id| close_end(receiver_thread_id, &mut agent_metadata))
+            first_receiver.map(|receiver_thread_id| {
+                close_end(receiver_thread_id, routing.as_ref(), &mut agent_metadata)
+            })
         }
     }
 }
@@ -288,69 +286,95 @@ pub(crate) fn sub_agent_activity_display(item: &ThreadItem) -> Option<SubAgentAc
         kind,
         agent_thread_id,
         agent_path,
+        routing,
         ..
     } = item
     else {
         return None;
     };
     let is_running_hint = match kind {
-        SubAgentActivityKind::Started => true,
-        SubAgentActivityKind::Interacted => return None,
-        SubAgentActivityKind::Interrupted | SubAgentActivityKind::Completed => false,
+        SubAgentActivityKind::Started => Some(true),
+        SubAgentActivityKind::Interacted => None,
+        SubAgentActivityKind::Interrupted | SubAgentActivityKind::Completed => Some(false),
     };
     Some(SubAgentActivityDisplay {
         thread_id: parse_thread_id(agent_thread_id)?,
         agent_path: agent_path.clone(),
         is_running_hint,
+        routing: routing.clone(),
     })
 }
 
 pub(crate) fn sub_agent_activity_history_cell(item: &ThreadItem) -> Option<PlainHistoryCell> {
     let ThreadItem::SubAgentActivity {
-        kind, agent_path, ..
+        kind,
+        agent_path,
+        routing,
+        ..
     } = item
     else {
         return None;
     };
     Some(collab_event(
-        sub_agent_activity_title(*kind, agent_path),
+        sub_agent_activity_title(*kind, agent_path, routing.as_ref()),
         Vec::new(),
     ))
 }
 
-pub(crate) fn sub_agent_activity_summary(kind: SubAgentActivityKind, agent_path: &str) -> String {
+pub(crate) fn sub_agent_activity_summary(
+    kind: SubAgentActivityKind,
+    agent_path: &str,
+    routing: Option<&SubAgentRouting>,
+) -> String {
+    let prefix = sub_agent_activity_words(kind);
+    format!("{prefix}`{agent_path}` · {}", routing_label(routing))
+}
+
+fn sub_agent_activity_words(kind: SubAgentActivityKind) -> &'static str {
     match kind {
-        SubAgentActivityKind::Started => format!("Started `{agent_path}`"),
-        SubAgentActivityKind::Interacted => format!("Interacted with `{agent_path}`"),
-        SubAgentActivityKind::Interrupted => format!("Interrupted `{agent_path}`"),
-        SubAgentActivityKind::Completed => format!("Completed `{agent_path}`"),
+        SubAgentActivityKind::Started => "Started ",
+        SubAgentActivityKind::Interacted => "Interacted with ",
+        SubAgentActivityKind::Interrupted => "Interrupted ",
+        SubAgentActivityKind::Completed => "Completed ",
     }
 }
 
-fn sub_agent_activity_title(kind: SubAgentActivityKind, agent_path: &str) -> Line<'static> {
-    let (prefix, path) = match kind {
-        SubAgentActivityKind::Started => ("Started ", agent_path),
-        SubAgentActivityKind::Interacted => ("Interacted with ", agent_path),
-        SubAgentActivityKind::Interrupted => ("Interrupted ", agent_path),
-        SubAgentActivityKind::Completed => ("Completed ", agent_path),
+pub(crate) fn routing_label(routing: Option<&SubAgentRouting>) -> String {
+    let Some(routing) = routing else {
+        return "model/effort unavailable".to_string();
     };
-    title_spans_line(vec![
+    match &routing.reasoning_effort {
+        Some(effort) => format!("{} {effort}", routing.model),
+        None => format!("{} · effort unspecified", routing.model),
+    }
+}
+
+fn sub_agent_activity_title(
+    kind: SubAgentActivityKind,
+    agent_path: &str,
+    routing: Option<&SubAgentRouting>,
+) -> Line<'static> {
+    let prefix = sub_agent_activity_words(kind);
+    let mut spans = vec![
         Span::from(prefix).bold(),
-        Span::from(format!("`{path}`")).cyan(),
-    ])
+        Span::from(format!("`{agent_path}`")).cyan(),
+    ];
+    spans.push(Span::from(" · ").dim());
+    spans.push(Span::from(routing_label(routing)).dim());
+    title_spans_line(spans)
 }
 
 fn spawn_end(
     new_thread_id: Option<ThreadId>,
     prompt: &str,
-    spawn_request: Option<&SpawnRequestSummary>,
+    routing: Option<&SubAgentRouting>,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
     let title = match new_thread_id {
         Some(thread_id) => title_with_agent(
             "Spawned",
             agent_label(thread_id, &agent_metadata(thread_id)),
-            spawn_request,
+            routing,
         ),
         None => title_text("Agent spawn failed"),
     };
@@ -365,12 +389,13 @@ fn spawn_end(
 fn interaction_end(
     receiver_thread_id: ThreadId,
     prompt: &str,
+    routing: Option<&SubAgentRouting>,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
     let title = title_with_agent(
         "Sent input to",
         agent_label(receiver_thread_id, &agent_metadata(receiver_thread_id)),
-        /*spawn_request*/ None,
+        routing,
     );
 
     let mut details = Vec::new();
@@ -382,20 +407,27 @@ fn interaction_end(
 
 fn waiting_begin(
     receiver_thread_ids: &[String],
+    agents_states: &std::collections::HashMap<String, CollabAgentState>,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
     let receiver_agents = receiver_thread_ids
         .iter()
         .filter_map(|thread_id| parse_thread_id(thread_id))
-        .map(|thread_id| (thread_id, agent_metadata(thread_id)))
+        .map(|thread_id| {
+            (
+                thread_id,
+                agent_metadata(thread_id),
+                agents_states
+                    .get(&thread_id.to_string())
+                    .and_then(|state| state.routing.as_ref()),
+            )
+        })
         .collect::<Vec<_>>();
 
     let title = match receiver_agents.as_slice() {
-        [(thread_id, metadata)] => title_with_agent(
-            "Waiting for",
-            agent_label(*thread_id, metadata),
-            /*spawn_request*/ None,
-        ),
+        [(thread_id, metadata, routing)] => {
+            title_with_agent("Waiting for", agent_label(*thread_id, metadata), *routing)
+        }
         [] => title_text("Waiting for agents"),
         _ => title_text(format!("Waiting for {} agents", receiver_agents.len())),
     };
@@ -403,7 +435,11 @@ fn waiting_begin(
     let details = if receiver_agents.len() > 1 {
         receiver_agents
             .iter()
-            .map(|(thread_id, metadata)| agent_label_line(agent_label(*thread_id, metadata)))
+            .map(|(thread_id, metadata, routing)| {
+                let mut line = agent_label_line(agent_label(*thread_id, metadata));
+                line.spans.extend(routing_spans(*routing));
+                line
+            })
             .collect()
     } else {
         Vec::new()
@@ -423,13 +459,14 @@ fn waiting_end(
 
 fn close_end(
     receiver_thread_id: ThreadId,
+    routing: Option<&SubAgentRouting>,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
     collab_event(
         title_with_agent(
             "Closed",
             agent_label(receiver_thread_id, &agent_metadata(receiver_thread_id)),
-            /*spawn_request*/ None,
+            routing,
         ),
         Vec::new(),
     )
@@ -437,13 +474,14 @@ fn close_end(
 
 fn resume_begin(
     receiver_thread_id: ThreadId,
+    routing: Option<&SubAgentRouting>,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
     collab_event(
         title_with_agent(
             "Resuming",
             agent_label(receiver_thread_id, &agent_metadata(receiver_thread_id)),
-            /*spawn_request*/ None,
+            routing,
         ),
         Vec::new(),
     )
@@ -453,13 +491,14 @@ fn resume_end(
     receiver_thread_id: ThreadId,
     status: Option<&CollabAgentState>,
     fallback_error: &str,
+    routing: Option<&SubAgentRouting>,
     agent_metadata: &mut impl FnMut(ThreadId) -> AgentMetadata,
 ) -> PlainHistoryCell {
     collab_event(
         title_with_agent(
             "Resumed",
             agent_label(receiver_thread_id, &agent_metadata(receiver_thread_id)),
-            /*spawn_request*/ None,
+            routing,
         ),
         vec![status_summary_line(status, fallback_error)],
     )
@@ -480,11 +519,11 @@ fn title_text(title: impl Into<String>) -> Line<'static> {
 fn title_with_agent(
     prefix: &str,
     agent: AgentLabel<'_>,
-    spawn_request: Option<&SpawnRequestSummary>,
+    routing: Option<&SubAgentRouting>,
 ) -> Line<'static> {
     let mut spans = vec![Span::from(format!("{prefix} ")).bold()];
     spans.extend(agent_label_spans(agent));
-    spans.extend(spawn_request_spans(spawn_request));
+    spans.extend(routing_spans(routing));
     title_spans_line(spans)
 }
 
@@ -535,23 +574,8 @@ fn agent_label_spans(agent: AgentLabel<'_>) -> Vec<Span<'static>> {
     spans
 }
 
-fn spawn_request_spans(spawn_request: Option<&SpawnRequestSummary>) -> Vec<Span<'static>> {
-    let Some(spawn_request) = spawn_request else {
-        return Vec::new();
-    };
-
-    let model = spawn_request.model.trim();
-    if model.is_empty() && spawn_request.reasoning_effort == ReasoningEffortConfig::default() {
-        return Vec::new();
-    }
-
-    let details = if model.is_empty() {
-        format!("({})", spawn_request.reasoning_effort)
-    } else {
-        format!("({model} {})", spawn_request.reasoning_effort)
-    };
-
-    vec![Span::from(" ").dim(), Span::from(details).magenta()]
+fn routing_spans(routing: Option<&SubAgentRouting>) -> Vec<Span<'static>> {
+    vec![" · ".dim(), routing_label(routing).dim()]
 }
 
 fn prompt_line(prompt: &str) -> Option<Line<'static>> {
@@ -600,6 +624,7 @@ fn wait_complete_lines(
             .into_iter()
             .map(|(thread_id, metadata, status)| {
                 let mut spans = agent_label_spans(agent_label(thread_id, &metadata));
+                spans.extend(routing_spans(status.routing.as_ref()));
                 spans.push(Span::from(": ").dim());
                 spans.extend(status_summary_spans(status));
                 spans.into()
@@ -687,15 +712,106 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn started_activity_title_shows_resolved_routing() {
+        let item = ThreadItem::SubAgentActivity {
+            id: "activity-1".to_string(),
+            kind: SubAgentActivityKind::Started,
+            agent_thread_id: ThreadId::new().to_string(),
+            agent_path: "/root/worker".to_string(),
+            routing: Some(SubAgentRouting {
+                model: "gpt-5.6-luna".to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::XHigh),
+            }),
+        };
+        let cell = sub_agent_activity_history_cell(&item).expect("started renders");
+        let rendered = cell
+            .display_lines(80)
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(rendered, "• Started `/root/worker` · gpt-5.6-luna xhigh");
+        assert_eq!(
+            sub_agent_activity_summary(
+                SubAgentActivityKind::Started,
+                "/root/worker",
+                item_routing(&item)
+            ),
+            "Started `/root/worker` · gpt-5.6-luna xhigh"
+        );
+    }
+
+    #[test]
+    fn interaction_labels_do_not_infer_action_from_routing_presence() {
+        let item = ThreadItem::SubAgentActivity {
+            id: "activity-2".to_string(),
+            kind: SubAgentActivityKind::Interacted,
+            agent_thread_id: ThreadId::new().to_string(),
+            agent_path: "/root/worker".to_string(),
+            routing: Some(SubAgentRouting {
+                model: "gpt-5.6-luna".to_string(),
+                reasoning_effort: Some(ReasoningEffortConfig::Max),
+            }),
+        };
+        let cell = sub_agent_activity_history_cell(&item).expect("interaction renders");
+        let rendered = cell
+            .display_lines(80)
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            rendered,
+            "• Interacted with `/root/worker` · gpt-5.6-luna max"
+        );
+
+        let plain = ThreadItem::SubAgentActivity {
+            id: "activity-3".to_string(),
+            kind: SubAgentActivityKind::Interacted,
+            agent_thread_id: ThreadId::new().to_string(),
+            agent_path: "/root/worker".to_string(),
+            routing: None,
+        };
+        let cell = sub_agent_activity_history_cell(&plain).expect("interaction renders");
+        let rendered = cell
+            .display_lines(80)
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            rendered,
+            "• Interacted with `/root/worker` · model/effort unavailable"
+        );
+    }
+
+    fn item_routing(item: &ThreadItem) -> Option<&SubAgentRouting> {
+        match item {
+            ThreadItem::SubAgentActivity { routing, .. } => routing.as_ref(),
+            _ => None,
+        }
+    }
+
+    #[test]
     fn interacted_sub_agent_activity_does_not_change_liveness() {
+        let thread_id = ThreadId::new();
         let item = ThreadItem::SubAgentActivity {
             id: "activity-1".to_string(),
             kind: SubAgentActivityKind::Interacted,
-            agent_thread_id: ThreadId::new().to_string(),
+            agent_thread_id: thread_id.to_string(),
             agent_path: "/root/child".to_string(),
+            routing: None,
         };
 
-        assert_eq!(sub_agent_activity_display(&item), None);
+        assert_eq!(
+            sub_agent_activity_display(&item),
+            Some(SubAgentActivityDisplay {
+                thread_id,
+                agent_path: "/root/child".to_string(),
+                is_running_hint: None,
+                routing: None,
+            })
+        );
     }
 
     #[test]
@@ -706,14 +822,16 @@ mod tests {
             kind: SubAgentActivityKind::Completed,
             agent_thread_id: thread_id.to_string(),
             agent_path: "/root/child".to_string(),
+            routing: None,
         };
 
         assert_eq!(
             sub_agent_activity_display(&item),
             Some(SubAgentActivityDisplay {
+                routing: None,
                 thread_id,
                 agent_path: "/root/child".to_string(),
-                is_running_hint: false,
+                is_running_hint: Some(false),
             })
         );
     }
@@ -742,7 +860,6 @@ mod tests {
                     agent_state(CollabAgentStatus::PendingInit, /*message*/ None),
                 )]),
             },
-            /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
         )
         .expect("spawn item renders");
@@ -762,7 +879,6 @@ mod tests {
                     agent_state(CollabAgentStatus::Running, /*message*/ None),
                 )]),
             },
-            /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
         )
         .expect("send-input item renders");
@@ -779,7 +895,6 @@ mod tests {
                 reasoning_effort: None,
                 agents_states: HashMap::new(),
             },
-            /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
         )
         .expect("wait begin item renders");
@@ -805,7 +920,6 @@ mod tests {
                     ),
                 ]),
             },
-            /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
         )
         .expect("wait end item renders");
@@ -825,7 +939,6 @@ mod tests {
                     agent_state(CollabAgentStatus::Completed, Some("39916800")),
                 )]),
             },
-            /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, bob_id),
         )
         .expect("close item renders");
@@ -909,7 +1022,6 @@ mod tests {
                     agent_state(CollabAgentStatus::PendingInit, /*message*/ None),
                 )]),
             },
-            /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, ThreadId::new()),
         )
         .expect("spawn item renders");
@@ -922,8 +1034,10 @@ mod tests {
         assert_eq!(title.spans[4].content.as_ref(), "[explorer]");
         assert_eq!(title.spans[4].style.fg, None);
         assert!(!title.spans[4].style.add_modifier.contains(Modifier::DIM));
-        assert_eq!(title.spans[6].content.as_ref(), "(gpt-5 high)");
-        assert_eq!(title.spans[6].style.fg, Some(Color::Magenta));
+        assert_eq!(title.spans[5].content.as_ref(), " · ");
+        assert_eq!(title.spans[6].content.as_ref(), "gpt-5 high");
+        assert_eq!(title.spans[6].style.fg, None);
+        assert!(title.spans[6].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
@@ -948,7 +1062,6 @@ mod tests {
                     agent_state(CollabAgentStatus::Interrupted, /*message*/ None),
                 )]),
             },
-            /*cached_spawn_request*/ None,
             |thread_id| metadata_for(thread_id, robie_id, ThreadId::new()),
         )
         .expect("resume item renders");
@@ -958,6 +1071,7 @@ mod tests {
 
     fn agent_state(status: CollabAgentStatus, message: Option<&str>) -> CollabAgentState {
         CollabAgentState {
+            routing: None,
             status,
             message: message.map(str::to_string),
         }

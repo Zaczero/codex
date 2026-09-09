@@ -16,6 +16,7 @@
 
 use crate::app_server_session::thread_blocks_direct_input;
 use codex_app_server_protocol::SessionSource;
+use codex_app_server_protocol::SubAgentRouting;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadStatus;
 use codex_protocol::ThreadId;
@@ -31,6 +32,7 @@ pub(crate) struct LoadedSubagentThread {
     pub(crate) agent_nickname: Option<String>,
     pub(crate) agent_role: Option<String>,
     pub(crate) agent_path: Option<String>,
+    pub(crate) routing: Option<SubAgentRouting>,
     pub(crate) blocks_direct_input: bool,
     pub(crate) is_running: bool,
     pub(crate) is_closed: bool,
@@ -96,6 +98,10 @@ pub(crate) fn find_loaded_subagent_threads_for_primary(
                     agent_nickname: thread.agent_nickname,
                     agent_role: thread.agent_role,
                     agent_path: thread_spawn_agent_path(&thread.source),
+                    routing: thread.model.map(|model| SubAgentRouting {
+                        model,
+                        reasoning_effort: thread.reasoning_effort,
+                    }),
                 })
         })
         .collect();
@@ -240,6 +246,7 @@ mod tests {
             loaded,
             vec![
                 LoadedSubagentThread {
+                    routing: None,
                     blocks_direct_input: false,
                     thread_id: child_thread_id,
                     agent_nickname: Some("Scout".to_string()),
@@ -249,6 +256,7 @@ mod tests {
                     is_closed: false,
                 },
                 LoadedSubagentThread {
+                    routing: None,
                     blocks_direct_input: true,
                     thread_id: grandchild_thread_id,
                     agent_nickname: Some("Atlas".to_string()),

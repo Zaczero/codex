@@ -4951,6 +4951,14 @@ class SubAgentActivityKind(Enum):
     completed = "completed"
 
 
+class SubAgentRouting(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    model: str
+    reasoning_effort: Annotated[ReasoningEffort | None, Field(alias="reasoningEffort")] = None
+
+
 class SubAgentSourceValue(Enum):
     review = "review"
     compact = "compact"
@@ -5278,6 +5286,12 @@ class SubAgentActivityThreadItem(BaseModel):
     agent_thread_id: Annotated[str, Field(alias="agentThreadId")]
     id: str
     kind: SubAgentActivityKind
+    routing: Annotated[
+        SubAgentRouting | None,
+        Field(
+            description="Routing captured for this activity; completion uses the finishing turn's routing."
+        ),
+    ] = None
     type: Annotated[Literal["subAgentActivity"], Field(title="SubAgentActivityThreadItemType")]
 
 
@@ -7471,6 +7485,7 @@ class CollabAgentState(BaseModel):
         populate_by_name=True,
     )
     message: str | None = None
+    routing: SubAgentRouting | None = None
     status: CollabAgentStatus
 
 
@@ -9561,7 +9576,7 @@ class CollabAgentToolCallThreadItem(BaseModel):
     ]
     id: Annotated[str, Field(description="Unique identifier for this collab tool call.")]
     model: Annotated[
-        str | None, Field(description="Model requested for the spawned agent, when applicable.")
+        str | None, Field(description="Model captured for a single target agent, when available.")
     ] = None
     prompt: Annotated[
         str | None,
@@ -9571,7 +9586,7 @@ class CollabAgentToolCallThreadItem(BaseModel):
         ReasoningEffort | None,
         Field(
             alias="reasoningEffort",
-            description="Reasoning effort requested for the spawned agent, when applicable.",
+            description="Reasoning effort captured for a single target agent, when available.",
         ),
     ] = None
     receiver_thread_ids: Annotated[

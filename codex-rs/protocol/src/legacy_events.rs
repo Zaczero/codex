@@ -256,6 +256,7 @@ impl CollabAgentToolCallItem {
             | CollabAgentTool::ListAgents => None,
             CollabAgentTool::SpawnAgent => Some(EventMsg::CollabAgentSpawnBegin(
                 CollabAgentSpawnBeginEvent {
+                    routing: self.routing(),
                     call_id: self.id.clone(),
                     started_at_ms,
                     sender_thread_id: self.sender_thread_id,
@@ -266,6 +267,7 @@ impl CollabAgentToolCallItem {
             )),
             CollabAgentTool::SendInput => receiver_thread_id.map(|receiver_thread_id| {
                 EventMsg::CollabAgentInteractionBegin(CollabAgentInteractionBeginEvent {
+                    routing: self.routing(),
                     call_id: self.id.clone(),
                     started_at_ms,
                     sender_thread_id: self.sender_thread_id,
@@ -277,6 +279,7 @@ impl CollabAgentToolCallItem {
                 let (receiver_agent_nickname, receiver_agent_role) =
                     self.receiver_agent_identity(receiver_thread_id);
                 EventMsg::CollabResumeBegin(CollabResumeBeginEvent {
+                    routing: self.routing(),
                     call_id: self.id.clone(),
                     started_at_ms,
                     sender_thread_id: self.sender_thread_id,
@@ -286,6 +289,7 @@ impl CollabAgentToolCallItem {
                 })
             }),
             CollabAgentTool::Wait => Some(EventMsg::CollabWaitingBegin(CollabWaitingBeginEvent {
+                statuses: self.agents_states.clone(),
                 started_at_ms,
                 sender_thread_id: self.sender_thread_id,
                 receiver_thread_ids: self.receiver_thread_ids.clone(),
@@ -294,6 +298,7 @@ impl CollabAgentToolCallItem {
             })),
             CollabAgentTool::CloseAgent => receiver_thread_id.map(|receiver_thread_id| {
                 EventMsg::CollabCloseBegin(CollabCloseBeginEvent {
+                    routing: self.routing(),
                     call_id: self.id.clone(),
                     started_at_ms,
                     sender_thread_id: self.sender_thread_id,
@@ -318,6 +323,7 @@ impl CollabAgentToolCallItem {
                     .map(|thread_id| self.receiver_agent_identity(thread_id))
                     .unwrap_or_default();
                 Some(EventMsg::CollabAgentSpawnEnd(CollabAgentSpawnEndEvent {
+                    routing: self.routing(),
                     call_id: self.id.clone(),
                     completed_at_ms,
                     sender_thread_id: self.sender_thread_id,
@@ -336,6 +342,7 @@ impl CollabAgentToolCallItem {
                 let (receiver_agent_nickname, receiver_agent_role) =
                     self.receiver_agent_identity(receiver_thread_id);
                 EventMsg::CollabAgentInteractionEnd(CollabAgentInteractionEndEvent {
+                    routing: self.routing(),
                     call_id: self.id.clone(),
                     completed_at_ms,
                     sender_thread_id: self.sender_thread_id,
@@ -350,6 +357,7 @@ impl CollabAgentToolCallItem {
                 let (receiver_agent_nickname, receiver_agent_role) =
                     self.receiver_agent_identity(receiver_thread_id);
                 EventMsg::CollabResumeEnd(CollabResumeEndEvent {
+                    routing: self.routing(),
                     call_id: self.id.clone(),
                     completed_at_ms,
                     sender_thread_id: self.sender_thread_id,
@@ -371,6 +379,7 @@ impl CollabAgentToolCallItem {
                         agent_nickname: agent.agent_nickname.clone(),
                         agent_role: agent.agent_role.clone(),
                         status: self.agent_status(agent.thread_id),
+                        routing: agent.routing.clone(),
                     })
                     .collect(),
                 statuses: self.agents_states.clone(),
@@ -379,6 +388,7 @@ impl CollabAgentToolCallItem {
                 let (receiver_agent_nickname, receiver_agent_role) =
                     self.receiver_agent_identity(receiver_thread_id);
                 EventMsg::CollabCloseEnd(CollabCloseEndEvent {
+                    routing: self.routing(),
                     call_id: self.id.clone(),
                     completed_at_ms,
                     sender_thread_id: self.sender_thread_id,
@@ -402,6 +412,15 @@ impl CollabAgentToolCallItem {
         )
     }
 
+    fn routing(&self) -> Option<crate::items::SubAgentRouting> {
+        self.model
+            .as_ref()
+            .map(|model| crate::items::SubAgentRouting {
+                model: model.clone(),
+                reasoning_effort: self.reasoning_effort.clone(),
+            })
+    }
+
     fn agent_status(&self, thread_id: ThreadId) -> AgentStatus {
         self.agents_states
             .get(&thread_id)
@@ -418,6 +437,7 @@ impl SubAgentActivityItem {
             agent_thread_id: self.agent_thread_id,
             agent_path: self.agent_path.clone(),
             kind: self.kind,
+            routing: self.routing.clone(),
         })
     }
 }

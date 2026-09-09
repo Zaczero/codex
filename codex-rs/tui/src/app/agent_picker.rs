@@ -136,6 +136,15 @@ impl App {
             }
             self.upsert_agent_picker_thread(thread_id, agent_nickname, agent_role, is_closed);
             self.agent_navigation.set_agent_path(thread_id, agent_path);
+            self.agent_navigation.set_routing(
+                thread_id,
+                thread
+                    .model
+                    .map(|model| codex_app_server_protocol::SubAgentRouting {
+                        model,
+                        reasoning_effort: thread.reasoning_effort,
+                    }),
+            );
             if !live && update_liveness {
                 self.agent_navigation.set_running(thread_id, is_running);
             }

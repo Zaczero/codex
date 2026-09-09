@@ -208,6 +208,7 @@ pub(super) fn completed_item(
                 kind: event.kind,
                 agent_thread_id: event.agent_thread_id,
                 agent_path: event.agent_path.clone(),
+                routing: event.routing.clone(),
             }),
             None,
         )),

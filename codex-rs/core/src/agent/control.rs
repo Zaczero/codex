@@ -40,6 +40,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HasLegacyEvent;
@@ -51,6 +52,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadHistoryMode;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::turn_input::CyberAccessProgram;
@@ -76,6 +78,7 @@ mod legacy;
 mod residency;
 mod service_tier;
 mod spawn;
+mod transitions;
 mod user_authorization;
 
 const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
@@ -110,6 +113,8 @@ pub(crate) struct LiveAgent {
 pub(crate) struct ListedAgent {
     pub(crate) agent_name: String,
     pub(crate) agent_status: AgentStatus,
+    pub(crate) model: String,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// Control-plane handle for multi-agent operations.
@@ -356,6 +361,17 @@ impl AgentControl {
         result
     }
 
+    /// Background terminals still owned by `agent_id`; an interrupt does not stop them.
+    pub(crate) async fn count_agent_background_terminals(&self, agent_id: ThreadId) -> usize {
+        let Ok(state) = self.upgrade() else {
+            return 0;
+        };
+        let Ok(thread) = state.get_thread(agent_id).await else {
+            return 0;
+        };
+        thread.list_background_terminals().await.len()
+    }
+
     /// Interrupt the current task for an existing agent thread.
     pub(crate) async fn interrupt_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
@@ -403,6 +419,16 @@ impl AgentControl {
         thread.agent_status().await
     }
 
+    pub(crate) async fn get_status_snapshot(
+        &self,
+        agent_id: ThreadId,
+    ) -> crate::agent::status::AgentStatusSnapshot {
+        match self.subscribe_status(agent_id).await {
+            Ok(receiver) => receiver.borrow().clone(),
+            Err(_) => AgentStatus::NotFound.into(),
+        }
+    }
+
     pub(crate) fn register_session_root(
         &self,
         current_thread_id: ThreadId,
@@ -445,6 +471,16 @@ impl AgentControl {
         Some(thread.config_snapshot().await)
     }
 
+    pub(crate) async fn get_agent_routing(
+        &self,
+        agent_id: ThreadId,
+    ) -> Option<codex_protocol::items::SubAgentRouting> {
+        self.get_agent_config_snapshot(agent_id)
+            .await
+            .as_ref()
+            .map(Into::into)
+    }
+
     pub(crate) async fn resolve_agent_reference(
         &self,
         _current_thread_id: ThreadId,
@@ -470,7 +506,7 @@ impl AgentControl {
     pub(crate) async fn subscribe_status(
         &self,
         agent_id: ThreadId,
-    ) -> CodexResult<watch::Receiver<AgentStatus>> {
+    ) -> CodexResult<watch::Receiver<crate::agent::status::AgentStatusSnapshot>> {
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         Ok(thread.subscribe_status())
@@ -583,9 +619,12 @@ impl AgentControl {
             && let Some(root_thread_id) = self.state.agent_id_for_path(&root_path)
             && let Ok(root_thread) = state.get_thread(root_thread_id).await
         {
+            let snapshot = root_thread.config_snapshot().await;
             agents.push(ListedAgent {
                 agent_name: root_path.to_string(),
                 agent_status: root_thread.agent_status().await,
+                model: snapshot.model,
+                reasoning_effort: snapshot.reasoning_effort,
             });
         }
 
@@ -608,9 +647,12 @@ impl AgentControl {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| thread_id.to_string());
+            let snapshot = thread.config_snapshot().await;
             agents.push(ListedAgent {
                 agent_name,
                 agent_status: thread.agent_status().await,
+                model: snapshot.model,
+                reasoning_effort: snapshot.reasoning_effort,
             });
         }
 
@@ -639,18 +681,18 @@ impl AgentControl {
             let status = match control.subscribe_status(child_thread_id).await {
                 Ok(mut status_rx) => {
                     let mut status = status_rx.borrow().clone();
-                    while !is_final(&status) {
+                    while !is_final(&status.status) {
                         if status_rx.changed().await.is_err() {
-                            status = control.get_status(child_thread_id).await;
+                            status.status = control.get_status(child_thread_id).await;
                             break;
                         }
                         status = status_rx.borrow().clone();
                     }
                     status
                 }
-                Err(_) => control.get_status(child_thread_id).await,
+                Err(_) => control.get_status_snapshot(child_thread_id).await,
             };
-            if !is_final(&status) {
+            if !is_final(&status.status) {
                 return;
             }
 
@@ -678,7 +720,8 @@ impl AgentControl {
                 let Some(message) = format_inter_agent_completion_message(
                     parent_agent_path.clone(),
                     child_agent_path.clone(),
-                    &status,
+                    &status.status,
+                    status.routing.clone(),
                 ) else {
                     return;
                 };
@@ -707,7 +750,8 @@ impl AgentControl {
             parent_thread
                 .inject_fragment_without_turn(SubagentNotification::new(
                     child_reference.as_str(),
-                    status,
+                    status.status,
+                    status.routing,
                 ))
                 .await;
         });

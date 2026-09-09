@@ -1,0 +1,8 @@
+---
+source: tui/src/app/tests/agent_routing_tests.rs
+expression: history
+---
+• Started `/root/reviewer` · gpt-5.6-luna xhigh
+• Interacted with `/root/reviewer` · gpt-5.6-luna xhigh
+• Interacted with `/root/reviewer` · gpt-5.6-sol high
+• Completed `/root/reviewer` · gpt-5.6-sol high

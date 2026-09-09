@@ -32,6 +32,7 @@ use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_utils_absolute_path::test_support::PathBufExt;
@@ -64,6 +65,9 @@ use codex_exec::McpToolCallStatus;
 use codex_exec::PatchApplyStatus;
 use codex_exec::PatchChangeKind;
 use codex_exec::ReasoningItem;
+use codex_exec::SubAgentActivityItem;
+use codex_exec::SubAgentActivityKind;
+use codex_exec::SubAgentRouting;
 use codex_exec::ThreadErrorEvent;
 use codex_exec::ThreadEvent;
 use codex_exec::ThreadItemDetails;
@@ -756,6 +760,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
                 agents_states: std::collections::HashMap::from([(
                     "thread-child".to_string(),
                     ApiCollabAgentState {
+                        routing: None,
                         status: ApiCollabAgentStatus::Running,
                         message: None,
                     },
@@ -778,6 +783,8 @@ fn collab_spawn_begin_and_end_emit_item_events() {
                         sender_thread_id: "thread-parent".to_string(),
                         receiver_thread_ids: Vec::new(),
                         prompt: Some("draft a plan".to_string()),
+                        model: Some("gpt-5".to_string()),
+                        reasoning_effort: None,
                         agents_states: std::collections::HashMap::new(),
                         status: CollabToolCallStatus::InProgress,
                     },),
@@ -797,15 +804,117 @@ fn collab_spawn_begin_and_end_emit_item_events() {
                         sender_thread_id: "thread-parent".to_string(),
                         receiver_thread_ids: vec!["thread-child".to_string()],
                         prompt: Some("draft a plan".to_string()),
+                        model: Some("gpt-5".to_string()),
+                        reasoning_effort: None,
                         agents_states: std::collections::HashMap::from([(
                             "thread-child".to_string(),
                             CollabAgentState {
                                 status: CollabAgentStatus::Running,
                                 message: None,
+                                routing: None,
                             },
                         )]),
                         status: CollabToolCallStatus::Completed,
                     },),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn collab_resume_and_sub_agent_activity_keep_captured_routing() {
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+    let api_routing = codex_app_server_protocol::SubAgentRouting {
+        model: "gpt-5.4".to_string(),
+        reasoning_effort: Some(ReasoningEffort::Low),
+    };
+    let routing = SubAgentRouting {
+        model: "gpt-5.4".to_string(),
+        reasoning_effort: Some(ReasoningEffort::Low),
+    };
+
+    let resumed = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::CollabAgentToolCall {
+                id: "collab-resume".to_string(),
+                tool: CollabAgentTool::ResumeAgent,
+                status: ApiCollabAgentToolCallStatus::Completed,
+                sender_thread_id: "thread-parent".to_string(),
+                receiver_thread_ids: vec!["thread-child".to_string()],
+                prompt: None,
+                model: Some("gpt-5.4".to_string()),
+                reasoning_effort: Some(ReasoningEffort::Low),
+                agents_states: std::collections::HashMap::from([(
+                    "thread-child".to_string(),
+                    ApiCollabAgentState {
+                        status: ApiCollabAgentStatus::Completed,
+                        message: Some("done".to_string()),
+                        routing: Some(api_routing.clone()),
+                    },
+                )]),
+            },
+            thread_id: "thread-parent".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+        },
+    ));
+    let completed = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::SubAgentActivity {
+                id: "activity-1".to_string(),
+                kind: codex_app_server_protocol::SubAgentActivityKind::Completed,
+                agent_thread_id: "thread-child".to_string(),
+                agent_path: "/root/worker".to_string(),
+                routing: Some(api_routing),
+            },
+            thread_id: "thread-parent".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+        },
+    ));
+
+    assert_eq!(
+        resumed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "item_0".to_string(),
+                    details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
+                        tool: CollabTool::ResumeAgent,
+                        sender_thread_id: "thread-parent".to_string(),
+                        receiver_thread_ids: vec!["thread-child".to_string()],
+                        prompt: None,
+                        model: Some("gpt-5.4".to_string()),
+                        reasoning_effort: Some(ReasoningEffort::Low),
+                        agents_states: std::collections::HashMap::from([(
+                            "thread-child".to_string(),
+                            CollabAgentState {
+                                status: CollabAgentStatus::Completed,
+                                message: Some("done".to_string()),
+                                routing: Some(routing.clone()),
+                            },
+                        )]),
+                        status: CollabToolCallStatus::Completed,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "item_1".to_string(),
+                    details: ThreadItemDetails::SubAgentActivity(SubAgentActivityItem {
+                        kind: SubAgentActivityKind::Completed,
+                        agent_thread_id: "thread-child".to_string(),
+                        agent_path: "/root/worker".to_string(),
+                        routing: Some(routing),
+                    }),
                 },
             })],
             status: CodexStatus::Running,

@@ -46,7 +46,14 @@ fn agent_status_uses_bounded_buffered_activity() {
         },
     ));
 
-    let preview = AgentStatusThreadPreview::from_store("/root/reviewer".to_string(), &store);
+    let preview = AgentStatusThreadPreview::from_store(
+        "/root/reviewer".to_string(),
+        Some(codex_app_server_protocol::SubAgentRouting {
+            model: "gpt-5.6-luna".to_string(),
+            reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::XHigh),
+        }),
+        &store,
+    );
     let cell = AgentStatusHistoryCell::new(vec![preview]);
     let rendered = cell
         .display_lines(/*width*/ 80)
@@ -59,7 +66,7 @@ fn agent_status_uses_bounded_buffered_activity() {
     /subagents
     Sub-agents running
 
-      • `/root/reviewer`
+      • `/root/reviewer` · gpt-5.6-luna xhigh
         $ cargo test -p codex-tui
         Finished checking the focused TUI tests.
     "###);
@@ -94,7 +101,11 @@ fn agent_status_uses_reasoning_summaries_only() {
         },
     ));
 
-    let preview = AgentStatusThreadPreview::from_store("/root/reviewer".to_string(), &store);
+    let preview = AgentStatusThreadPreview::from_store(
+        "/root/reviewer".to_string(),
+        /*routing*/ None,
+        &store,
+    );
     let cell = AgentStatusHistoryCell::new(vec![preview]);
     let rendered = cell
         .display_lines(/*width*/ 80)
@@ -107,7 +118,7 @@ fn agent_status_uses_reasoning_summaries_only() {
     /subagents
     Sub-agents running
 
-      • `/root/reviewer`
+      • `/root/reviewer` · model/effort unavailable
         safe summary
     "###);
     assert!(!rendered.contains("hidden raw reasoning"));

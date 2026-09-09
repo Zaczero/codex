@@ -392,6 +392,65 @@ pub(crate) async fn apply_spawn_agent_role(
     )
 }
 
+/// Model and effort an existing child will run under after a follow-up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedAgentRouting {
+    pub(crate) model: String,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
+}
+
+/// Resolves a follow-up's optional routing against the child's current selection.
+///
+/// Omitted values keep the child's current model and effort. A new model without an
+/// explicit effort takes that model's default, and an explicit effort is validated
+/// against the model it will run on. Nothing is applied here; callers compare the
+/// result with the child's snapshot to decide whether a re-route is needed.
+pub(crate) async fn resolve_agent_routing(
+    session: &Session,
+    turn: &TurnContext,
+    config: &Config,
+    current_model: &str,
+    current_reasoning_effort: Option<&ReasoningEffort>,
+    requested_model: Option<&str>,
+    requested_reasoning_effort: Option<ReasoningEffort>,
+) -> Result<ResolvedAgentRouting, FunctionCallError> {
+    let models_manager = &session.services.models_manager;
+    let model_changed = requested_model.is_some_and(|requested| requested != current_model);
+    let model = match requested_model {
+        Some(requested) if model_changed => {
+            let available_models = models_manager
+                .list_models(RefreshStrategy::Offline, config.http_client_factory())
+                .await;
+            find_spawn_agent_model_name(&available_models, requested, turn.multi_agent_version)?
+        }
+        _ => current_model.to_string(),
+    };
+    let reasoning_effort = match requested_reasoning_effort {
+        Some(effort) => {
+            let model_info = models_manager
+                .get_model_info(&model, &config.to_models_manager_config())
+                .await;
+            validate_spawn_agent_reasoning_effort(
+                &model,
+                &model_info.supported_reasoning_levels,
+                &effort,
+            )?;
+            Some(effort)
+        }
+        None if model_changed => {
+            models_manager
+                .get_model_info(&model, &config.to_models_manager_config())
+                .await
+                .default_reasoning_level
+        }
+        None => current_reasoning_effort.cloned(),
+    };
+    Ok(ResolvedAgentRouting {
+        model,
+        reasoning_effort,
+    })
+}
+
 fn find_spawn_agent_model_name(
     available_models: &[ModelPreset],
     requested_model: &str,

@@ -45,6 +45,11 @@ async fn handle_close_agent(
     let receiver_agent = session.services.agent_control.get_agent_metadata(agent_id);
     let known_agent = receiver_agent.is_some();
     let receiver_agent = receiver_agent.unwrap_or_default();
+    let mut routing = session
+        .services
+        .agent_control
+        .get_agent_routing(agent_id)
+        .await;
     session
         .emit_turn_item_started(
             &turn,
@@ -56,8 +61,10 @@ async fn handle_close_agent(
                 receiver_thread_ids: vec![agent_id],
                 receiver_agents: Vec::new(),
                 prompt: None,
-                model: None,
-                reasoning_effort: None,
+                model: routing.as_ref().map(|routing| routing.model.clone()),
+                reasoning_effort: routing
+                    .as_ref()
+                    .and_then(|routing| routing.reasoning_effort.clone()),
                 agents_states: Default::default(),
             }),
         )
@@ -72,7 +79,11 @@ async fn handle_close_agent(
         Err(err)
             if known_agent && matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) =>
         {
-            session.services.agent_control.get_status(agent_id).await
+            session
+                .services
+                .agent_control
+                .get_status_snapshot(agent_id)
+                .await
         }
         Err(err) => {
             let status = session.services.agent_control.get_status(agent_id).await;
@@ -89,10 +100,13 @@ async fn handle_close_agent(
                             thread_id: agent_id,
                             agent_nickname: receiver_agent.agent_nickname.clone(),
                             agent_role: receiver_agent.agent_role.clone(),
+                            routing: routing.clone(),
                         }],
                         prompt: None,
-                        model: None,
-                        reasoning_effort: None,
+                        model: routing.as_ref().map(|routing| routing.model.clone()),
+                        reasoning_effort: routing
+                            .as_ref()
+                            .and_then(|routing| routing.reasoning_effort.clone()),
                         agents_states: [(agent_id, status)].into_iter().collect(),
                     }),
                 )
@@ -100,6 +114,8 @@ async fn handle_close_agent(
             return Err(collab_agent_error(agent_id, err));
         }
     };
+    routing = status.routing.or(routing);
+    let status = status.status;
     let result = Box::pin(session.services.agent_control.close_agent(agent_id))
         .await
         .map_err(|err| collab_agent_error(agent_id, err))
@@ -117,10 +133,13 @@ async fn handle_close_agent(
                     thread_id: agent_id,
                     agent_nickname: receiver_agent.agent_nickname,
                     agent_role: receiver_agent.agent_role,
+                    routing: routing.clone(),
                 }],
                 prompt: None,
-                model: None,
-                reasoning_effort: None,
+                model: routing.as_ref().map(|routing| routing.model.clone()),
+                reasoning_effort: routing
+                    .as_ref()
+                    .and_then(|routing| routing.reasoning_effort.clone()),
                 agents_states: [(agent_id, status.clone())].into_iter().collect(),
             }),
         )
@@ -129,6 +148,7 @@ async fn handle_close_agent(
 
     Ok(CloseAgentResult {
         previous_status: status,
+        routing,
     })
 }
 
@@ -141,6 +161,7 @@ impl CoreToolRuntime for Handler {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct CloseAgentResult {
     pub(crate) previous_status: AgentStatus,
+    pub(crate) routing: Option<codex_protocol::items::SubAgentRouting>,
 }
 
 impl ToolOutput for CloseAgentResult {

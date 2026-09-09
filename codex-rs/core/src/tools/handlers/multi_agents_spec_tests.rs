@@ -122,7 +122,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     );
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
-        json!(["task_name", "nickname"])
+        json!(["task_name", "nickname", "model", "reasoning_effort"])
     );
 }
 
@@ -339,14 +339,47 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
 }
 
 #[test]
-fn followup_task_tool_requires_message_and_has_no_output_schema() {
+fn followup_task_tool_exposes_routing_only_with_model_overrides() {
+    let exposed = SpawnAgentToolOptions {
+        expose_spawn_agent_model_overrides: true,
+        ..Default::default()
+    };
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = create_followup_task_tool(&exposed)
+    else {
+        panic!("followup_task should be a function tool");
+    };
+    let properties = parameters
+        .properties
+        .as_ref()
+        .expect("followup_task should use object params");
+    assert!(properties.contains_key("model"));
+    assert!(properties.contains_key("reasoning_effort"));
+    assert_eq!(
+        parameters.required.as_ref(),
+        Some(&vec!["target".to_string(), "message".to_string()])
+    );
+    assert_eq!(
+        output_schema.expect("followup_task output schema")["required"],
+        json!(["model", "reasoning_effort", "interrupted"])
+    );
+}
+
+#[test]
+fn followup_task_tool_requires_message_and_hides_routing_by_default() {
     let ToolSpec::Function(ResponsesApiTool {
         name,
         description,
         parameters,
         output_schema,
         ..
-    }) = create_followup_task_tool()
+    }) = create_followup_task_tool(&SpawnAgentToolOptions {
+        expose_spawn_agent_model_overrides: false,
+        ..Default::default()
+    })
     else {
         panic!("followup_task should be a function tool");
     };
@@ -354,6 +387,13 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
     assert_eq!(
         description,
         "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+    );
+    assert!(
+        !parameters
+            .properties
+            .as_ref()
+            .expect("followup_task should use object params")
+            .contains_key("model")
     );
     assert_eq!(
         parameters.schema_type,
@@ -376,7 +416,7 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         parameters.required.as_ref(),
         Some(&vec!["target".to_string(), "message".to_string()])
     );
-    assert_eq!(output_schema, None);
+    assert!(output_schema.is_some());
 }
 
 #[test]

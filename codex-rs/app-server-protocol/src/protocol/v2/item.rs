@@ -32,6 +32,7 @@ use codex_protocol::items::CollabAgentToolCallStatus as CoreCollabAgentToolCallS
 use codex_protocol::items::CommandExecutionStatus as CoreCommandExecutionStatus;
 use codex_protocol::items::DynamicToolCallStatus as CoreDynamicToolCallStatus;
 use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
+use codex_protocol::items::SubAgentRouting as CoreSubAgentRouting;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
@@ -373,9 +374,9 @@ pub enum ThreadItem {
         receiver_thread_ids: Vec<String>,
         /// Prompt text sent as part of the collab tool call, when available.
         prompt: Option<String>,
-        /// Model requested for the spawned agent, when applicable.
+        /// Model captured for a single target agent, when available.
         model: Option<String>,
-        /// Reasoning effort requested for the spawned agent, when applicable.
+        /// Reasoning effort captured for a single target agent, when available.
         reasoning_effort: Option<ReasoningEffort>,
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
@@ -387,6 +388,9 @@ pub enum ThreadItem {
         kind: SubAgentActivityKind,
         agent_thread_id: String,
         agent_path: String,
+        /// Routing captured for this activity; completion uses the finishing turn's routing.
+        #[serde(default)]
+        routing: Option<SubAgentRouting>,
     },
     WebSearch(WebSearchItem),
     #[serde(rename_all = "camelCase")]
@@ -960,7 +964,17 @@ impl From<CoreTurnItem> for ThreadItem {
                 agents_states: call
                     .agents_states
                     .into_iter()
-                    .map(|(thread_id, status)| (thread_id.to_string(), status.into()))
+                    .map(|(thread_id, status)| {
+                        let routing = call
+                            .receiver_agents
+                            .iter()
+                            .find(|agent| agent.thread_id == thread_id)
+                            .and_then(|agent| agent.routing.clone());
+                        (
+                            thread_id.to_string(),
+                            CollabAgentState::with_routing(status, routing),
+                        )
+                    })
                     .collect(),
             },
             CoreTurnItem::SubAgentActivity(activity) => ThreadItem::SubAgentActivity {
@@ -968,6 +982,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 kind: activity.kind.into(),
                 agent_thread_id: activity.agent_thread_id.to_string(),
                 agent_path: String::from(activity.agent_path),
+                routing: activity.routing.map(Into::into),
             },
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch(WebSearchItem {
                 id: search.id,
@@ -1249,6 +1264,25 @@ pub enum SubAgentActivityKind {
     Completed,
 }
 
+/// Resolved model selection recorded with sub-agent activity.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SubAgentRouting {
+    pub model: String,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+impl From<CoreSubAgentRouting> for SubAgentRouting {
+    fn from(value: CoreSubAgentRouting) -> Self {
+        Self {
+            model: value.model,
+            reasoning_effort: value.reasoning_effort,
+        }
+    }
+}
+
 impl From<CoreSubAgentActivityKind> for SubAgentActivityKind {
     fn from(value: CoreSubAgentActivityKind) -> Self {
         match value {
@@ -1279,39 +1313,38 @@ pub enum CollabAgentStatus {
 pub struct CollabAgentState {
     pub status: CollabAgentStatus,
     pub message: Option<String>,
+    #[serde(default)]
+    pub routing: Option<SubAgentRouting>,
+}
+
+impl CollabAgentState {
+    /// Pairs a status with the routing captured for the execution that produced it.
+    pub(crate) fn with_routing(
+        status: CoreAgentStatus,
+        routing: Option<CoreSubAgentRouting>,
+    ) -> Self {
+        Self {
+            routing: routing.map(Into::into),
+            ..status.into()
+        }
+    }
 }
 
 impl From<CoreAgentStatus> for CollabAgentState {
     fn from(value: CoreAgentStatus) -> Self {
-        match value {
-            CoreAgentStatus::PendingInit => Self {
-                status: CollabAgentStatus::PendingInit,
-                message: None,
-            },
-            CoreAgentStatus::Running => Self {
-                status: CollabAgentStatus::Running,
-                message: None,
-            },
-            CoreAgentStatus::Interrupted => Self {
-                status: CollabAgentStatus::Interrupted,
-                message: None,
-            },
-            CoreAgentStatus::Completed(message) => Self {
-                status: CollabAgentStatus::Completed,
-                message,
-            },
-            CoreAgentStatus::Errored(message) => Self {
-                status: CollabAgentStatus::Errored,
-                message: Some(message),
-            },
-            CoreAgentStatus::Shutdown => Self {
-                status: CollabAgentStatus::Shutdown,
-                message: None,
-            },
-            CoreAgentStatus::NotFound => Self {
-                status: CollabAgentStatus::NotFound,
-                message: None,
-            },
+        let (status, message) = match value {
+            CoreAgentStatus::PendingInit => (CollabAgentStatus::PendingInit, None),
+            CoreAgentStatus::Running => (CollabAgentStatus::Running, None),
+            CoreAgentStatus::Interrupted => (CollabAgentStatus::Interrupted, None),
+            CoreAgentStatus::Completed(message) => (CollabAgentStatus::Completed, message),
+            CoreAgentStatus::Errored(message) => (CollabAgentStatus::Errored, Some(message)),
+            CoreAgentStatus::Shutdown => (CollabAgentStatus::Shutdown, None),
+            CoreAgentStatus::NotFound => (CollabAgentStatus::NotFound, None),
+        };
+        Self {
+            status,
+            message,
+            routing: None,
         }
     }
 }

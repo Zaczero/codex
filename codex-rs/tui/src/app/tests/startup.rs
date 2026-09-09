@@ -996,6 +996,7 @@ async fn known_thread_started_preserves_session_without_reading_unmaterialized_r
     assert_eq!(
         app.agent_navigation.get(&thread_id),
         Some(&AgentPickerThreadEntry {
+            routing: None,
             agent_nickname: Some("Robie".to_string()),
             agent_role: Some("explorer".to_string()),
             agent_path: None,

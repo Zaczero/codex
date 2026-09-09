@@ -37,7 +37,7 @@ impl ThreadLifecycleContributor<Config> for ThreadStartRecorder {
 async fn forward_events_filters_private_events_before_blocked_send_is_cancelled() {
     let (tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit.into());
     let io = Arc::new(SessionIo {
         tx_sub,
         rx_event: rx_events,
@@ -132,7 +132,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
 async fn forward_ops_preserves_submission_trace_context() {
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events) = bounded(SUBMISSION_CHANNEL_CAPACITY);
-    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit);
+    let (_agent_status_tx, agent_status) = watch::channel(AgentStatus::PendingInit.into());
     let io = Arc::new(SessionIo {
         tx_sub,
         rx_event: rx_events,

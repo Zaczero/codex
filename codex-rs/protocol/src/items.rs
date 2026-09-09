@@ -355,6 +355,21 @@ pub struct SubAgentActivityItem {
     pub kind: SubAgentActivityKind,
     pub agent_thread_id: ThreadId,
     pub agent_path: AgentPath,
+    /// Model and effort the agent runs under once this activity took effect.
+    /// Present when the activity started or re-routed the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub routing: Option<SubAgentRouting>,
+}
+
+/// Resolved model selection recorded with sub-agent activity so transcripts show
+/// what actually ran rather than what the parent asked for.
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+pub struct SubAgentRouting {
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]

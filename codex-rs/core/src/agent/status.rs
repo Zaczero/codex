@@ -1,5 +1,24 @@
+use codex_protocol::items::SubAgentRouting;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
+use serde::Deserialize;
+use serde::Serialize;
+
+/// Status and the routing of the execution that produced it, published atomically.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AgentStatusSnapshot {
+    pub(crate) status: AgentStatus,
+    pub(crate) routing: Option<SubAgentRouting>,
+}
+
+impl From<AgentStatus> for AgentStatusSnapshot {
+    fn from(status: AgentStatus) -> Self {
+        Self {
+            status,
+            routing: None,
+        }
+    }
+}
 
 /// Derive the next agent status from a single emitted event.
 /// Returns `None` when the event does not affect status tracking.

@@ -1163,6 +1163,15 @@ impl App {
             }
             self.chat_widget.on_misalignment_policy_violation();
         }
+        if let ServerNotification::ThreadSettingsUpdated(settings) = &notification {
+            self.agent_navigation.set_routing(
+                thread_id,
+                Some(codex_app_server_protocol::SubAgentRouting {
+                    model: settings.thread_settings.model.clone(),
+                    reasoning_effort: settings.thread_settings.effort.clone(),
+                }),
+            );
+        }
         if matches!(
             notification,
             ServerNotification::ThreadSettingsUpdated(_) | ServerNotification::ThreadArchived(_)
@@ -1205,6 +1214,15 @@ impl App {
                 started.thread.agent_nickname.clone(),
                 started.thread.agent_role.clone(),
                 /*is_closed*/ false,
+            );
+            self.agent_navigation.set_routing(
+                thread_id,
+                started.thread.model.as_ref().map(|model| {
+                    codex_app_server_protocol::SubAgentRouting {
+                        model: model.clone(),
+                        reasoning_effort: started.thread.reasoning_effort.clone(),
+                    }
+                }),
             );
 
             // Lifecycle responses already contain authoritative session state. Their rollout may
@@ -1327,6 +1345,11 @@ impl App {
         let Some(receiver_thread_ids) = collab_receiver_thread_ids(notification) else {
             return;
         };
+        let item = match notification {
+            ServerNotification::ItemStarted(notification) => &notification.item,
+            ServerNotification::ItemCompleted(notification) => &notification.item,
+            _ => return,
+        };
 
         for receiver_thread_id in receiver_thread_ids {
             if collab_receiver_is_not_found(notification, receiver_thread_id) {
@@ -1341,14 +1364,34 @@ impl App {
                 continue;
             };
 
-            if self.agent_navigation.get(&thread_id).is_some() {
-                continue;
+            if self.agent_navigation.get(&thread_id).is_none() {
+                self.upsert_agent_picker_thread(
+                    thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                    /*is_closed*/ false,
+                );
             }
-
-            self.upsert_agent_picker_thread(
-                thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
-                /*is_closed*/ false,
-            );
+            if let ThreadItem::CollabAgentToolCall {
+                model,
+                reasoning_effort,
+                agents_states,
+                ..
+            } = item
+            {
+                let routing =
+                    agents_states
+                        .get(receiver_thread_id)
+                        .and_then(|state| state.routing.clone())
+                        .or_else(|| match receiver_thread_ids {
+                            [_] => model.as_ref().map(|model| {
+                                codex_app_server_protocol::SubAgentRouting {
+                                    model: model.clone(),
+                                    reasoning_effort: reasoning_effort.clone(),
+                                }
+                            }),
+                            _ => None,
+                        });
+                self.agent_navigation.set_routing(thread_id, routing);
+            }
         }
     }
 
@@ -1515,6 +1558,13 @@ impl App {
         self.upsert_agent_picker_thread(
             thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
             /*is_closed*/ false,
+        );
+        self.agent_navigation.set_routing(
+            thread_id,
+            Some(codex_app_server_protocol::SubAgentRouting {
+                model: session.model.clone(),
+                reasoning_effort: session.reasoning_effort.clone(),
+            }),
         );
         let channel = self.ensure_thread_channel(thread_id);
         {

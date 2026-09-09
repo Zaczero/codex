@@ -2360,6 +2360,7 @@ async fn subagent_activity_emits_matching_start_and_completion() {
         kind: codex_protocol::protocol::SubAgentActivityKind::Started,
         agent_thread_id: ThreadId::new(),
         agent_path: AgentPath::root(),
+        routing: None,
     };
 
     crate::tools::handlers::multi_agents_v2::emit_sub_agent_activity(&session, &turn_context, item)
@@ -6352,7 +6353,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
     };
 
     let (tx_event, _rx_event) = async_channel::unbounded();
-    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit.into());
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
         Arc::clone(&auth_manager),
@@ -6448,7 +6449,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
     let agent_control = AgentControl::default();
     let exec_policy = Arc::new(ExecPolicyManager::default());
-    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit.into());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
@@ -6807,7 +6808,7 @@ async fn make_session_with_config_and_rx(
     };
 
     let (tx_event, rx_event) = async_channel::unbounded();
-    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit.into());
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
         Arc::clone(&auth_manager),
@@ -6935,7 +6936,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     };
 
     let (tx_event, rx_event) = async_channel::unbounded();
-    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit.into());
     let plugins_manager = Arc::new(plugins_manager_for_config(
         &config,
         Arc::clone(&auth_manager),
@@ -7757,7 +7758,7 @@ async fn submit_with_trace_captures_current_span_trace_context() {
     let io = SessionIo {
         tx_sub,
         rx_event,
-        agent_status: watch::channel(AgentStatus::PendingInit).1,
+        agent_status: watch::channel(AgentStatus::PendingInit.into()).1,
         session_loop_termination: completed_session_loop_termination(),
     };
 
@@ -8507,7 +8508,7 @@ async fn shutdown_and_wait_allows_multiple_waiters() {
     let io = Arc::new(SessionIo {
         tx_sub,
         rx_event,
-        agent_status: watch::channel(AgentStatus::PendingInit).1,
+        agent_status: watch::channel(AgentStatus::PendingInit.into()).1,
         session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
     });
 
@@ -8543,7 +8544,7 @@ async fn shutdown_and_wait_waits_when_shutdown_is_already_in_progress() {
     let io = Arc::new(SessionIo {
         tx_sub,
         rx_event,
-        agent_status: watch::channel(AgentStatus::PendingInit).1,
+        agent_status: watch::channel(AgentStatus::PendingInit.into()).1,
         session_loop_termination: session_loop_termination_from_handle(session_loop_handle),
     });
 
@@ -8579,7 +8580,7 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
     let parent_io = SessionIo {
         tx_sub: parent_tx_sub,
         rx_event: parent_rx_event,
-        agent_status: watch::channel(AgentStatus::PendingInit).1,
+        agent_status: watch::channel(AgentStatus::PendingInit.into()).1,
         session_loop_termination: session_loop_termination_from_handle(parent_session_loop_handle),
     };
 
@@ -8601,7 +8602,7 @@ async fn shutdown_and_wait_shuts_down_cached_guardian_subagent() {
     let child_io = SessionIo {
         tx_sub: child_tx_sub,
         rx_event: child_rx_event,
-        agent_status: watch::channel(AgentStatus::PendingInit).1,
+        agent_status: watch::channel(AgentStatus::PendingInit.into()).1,
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     parent_session
@@ -8633,7 +8634,7 @@ async fn cached_guardian_subagent_exposes_its_rollout_path() {
     let child_io = SessionIo {
         tx_sub: child_tx_sub,
         rx_event: child_rx_event,
-        agent_status: watch::channel(AgentStatus::PendingInit).1,
+        agent_status: watch::channel(AgentStatus::PendingInit.into()).1,
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     parent_session
@@ -8664,7 +8665,7 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
     let parent_io = SessionIo {
         tx_sub: parent_tx_sub,
         rx_event: parent_rx_event,
-        agent_status: watch::channel(AgentStatus::PendingInit).1,
+        agent_status: watch::channel(AgentStatus::PendingInit.into()).1,
         session_loop_termination: session_loop_termination_from_handle(parent_session_loop_handle),
     };
 
@@ -8686,7 +8687,7 @@ async fn shutdown_and_wait_shuts_down_tracked_ephemeral_guardian_review() {
     let child_io = SessionIo {
         tx_sub: child_tx_sub,
         rx_event: child_rx_event,
-        agent_status: watch::channel(AgentStatus::PendingInit).1,
+        agent_status: watch::channel(AgentStatus::PendingInit.into()).1,
         session_loop_termination: session_loop_termination_from_handle(child_session_loop_handle),
     };
     parent_session
@@ -8753,7 +8754,7 @@ where
     );
     let agent_control = AgentControl::default();
     let exec_policy = Arc::new(ExecPolicyManager::default());
-    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit.into());
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());

@@ -613,7 +613,7 @@ async fn thread_settings_updated_preserves_default_settings_for_plan_mode() {
 }
 
 #[tokio::test]
-async fn collab_spawn_end_shows_requested_model_and_effort() {
+async fn collab_spawn_end_does_not_reuse_requested_route() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     let sender_thread_id = ThreadId::new();
     let spawned_thread_id = ThreadId::new();
@@ -659,6 +659,7 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
                 agents_states: HashMap::from([(
                     spawned_thread_id.to_string(),
                     AppServerCollabAgentState {
+                        routing: None,
                         status: AppServerCollabAgentStatus::PendingInit,
                         message: None,
                     },
@@ -676,8 +677,12 @@ async fn collab_spawn_end_shows_requested_model_and_effort() {
         .join("\n");
 
     assert!(
-        rendered.contains("Spawned Robie [explorer] (gpt-5 high)"),
-        "expected spawn line to include agent metadata and requested model, got {rendered:?}"
+        rendered.contains("Spawned Robie [explorer] · model/effort unavailable"),
+        "expected spawn line to report the unresolved route, got {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("gpt-5"),
+        "requested route must not be shown as the spawned agent's route, got {rendered:?}"
     );
 }
 
@@ -1189,6 +1194,7 @@ async fn live_app_server_sub_agent_activity_renders_once() {
         kind: codex_app_server_protocol::SubAgentActivityKind::Completed,
         agent_thread_id: ThreadId::new().to_string(),
         agent_path: "/root/researcher".to_string(),
+        routing: None,
     };
 
     chat.handle_server_notification(
@@ -1214,6 +1220,69 @@ async fn live_app_server_sub_agent_activity_renders_once() {
     assert_eq!(cells.len(), 1);
     let rendered = lines_to_single_string(&cells[0]);
     assert_chatwidget_snapshot!("app_server_sub_agent_activity_renders_once", rendered);
+}
+
+#[tokio::test]
+async fn sub_agent_routing_is_preserved_in_main_chat_live_and_replay() {
+    for replay in [
+        None,
+        Some(ReplayKind::ThreadSnapshot),
+        Some(ReplayKind::ResumeInitialMessages),
+    ] {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        let worker_id = ThreadId::new().to_string();
+        for (id, kind, model, effort) in [
+            (
+                "spawn",
+                codex_app_server_protocol::SubAgentActivityKind::Started,
+                "gpt-5.6-luna",
+                ReasoningEffortConfig::XHigh,
+            ),
+            (
+                "continue",
+                codex_app_server_protocol::SubAgentActivityKind::Interacted,
+                "gpt-6-astra",
+                ReasoningEffortConfig::High,
+            ),
+        ] {
+            let item = AppServerThreadItem::SubAgentActivity {
+                id: id.to_string(),
+                kind,
+                agent_thread_id: worker_id.clone(),
+                agent_path: "/root/worker".to_string(),
+                routing: Some(codex_app_server_protocol::SubAgentRouting {
+                    model: model.to_string(),
+                    reasoning_effort: Some(effort),
+                }),
+            };
+            chat.handle_server_notification(
+                ServerNotification::ItemStarted(ItemStartedNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: id.to_string(),
+                    started_at_ms: 0,
+                    item: item.clone(),
+                }),
+                replay,
+            );
+            chat.handle_server_notification(
+                ServerNotification::ItemCompleted(ItemCompletedNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: id.to_string(),
+                    completed_at_ms: 0,
+                    item,
+                }),
+                replay,
+            );
+        }
+        let cells = drain_insert_history(&mut rx);
+        assert_eq!(cells.len(), 2);
+        let rendered = cells
+            .iter()
+            .map(|cell| lines_to_single_string(cell))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_chatwidget_snapshot!("sub_agent_routing_main_chat_live_and_replay", rendered);
+    }
 }
 
 #[tokio::test]
@@ -1280,6 +1349,7 @@ async fn live_app_server_collab_wait_items_render_history() {
                     (
                         receiver_thread_id.to_string(),
                         AppServerCollabAgentState {
+                            routing: None,
                             status: AppServerCollabAgentStatus::Completed,
                             message: Some("Done".to_string()),
                         },
@@ -1287,6 +1357,7 @@ async fn live_app_server_collab_wait_items_render_history() {
                     (
                         other_receiver_thread_id.to_string(),
                         AppServerCollabAgentState {
+                            routing: None,
                             status: AppServerCollabAgentStatus::Running,
                             message: None,
                         },
@@ -1306,7 +1377,7 @@ async fn live_app_server_collab_wait_items_render_history() {
 }
 
 #[tokio::test]
-async fn live_app_server_collab_spawn_completed_renders_requested_model_and_effort() {
+async fn live_app_server_collab_spawn_completed_renders_resolved_model_and_effort() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let sender_thread_id =
         ThreadId::from_string("019cff70-2599-75e2-af72-b90000000002").expect("valid thread id");
@@ -1350,6 +1421,7 @@ async fn live_app_server_collab_spawn_completed_renders_requested_model_and_effo
                 agents_states: HashMap::from([(
                     spawned_thread_id.to_string(),
                     AppServerCollabAgentState {
+                        routing: None,
                         status: AppServerCollabAgentStatus::PendingInit,
                         message: None,
                     },
@@ -1365,7 +1437,7 @@ async fn live_app_server_collab_spawn_completed_renders_requested_model_and_effo
         .collect::<Vec<_>>()
         .join("\n");
     assert_chatwidget_snapshot!(
-        "app_server_collab_spawn_completed_renders_requested_model_and_effort",
+        "app_server_collab_spawn_completed_renders_resolved_model_and_effort",
         combined
     );
 }

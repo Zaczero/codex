@@ -589,6 +589,13 @@ pub struct AdditionalContextEntry {
     pub kind: AdditionalContextKind,
 }
 
+#[derive(Debug)]
+pub struct AgentRerouteOutcome {
+    pub model: String,
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
+    pub interrupted: bool,
+}
+
 /// Submission operation
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
@@ -597,6 +604,9 @@ pub enum Op {
     /// Abort current task without terminating background terminal processes.
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
+
+    /// Interrupt and acknowledge only after the selected turn's teardown completes.
+    InterruptAndWait { reply: oneshot::Sender<()> },
 
     /// Terminate all running background terminal processes for this thread.
     /// Use this when callers intentionally want to stop long-lived background shells.
@@ -661,6 +671,14 @@ pub enum Op {
     InterAgentCommunication {
         communication: InterAgentCommunication,
         start_options: TurnStartOptions,
+    },
+
+    /// Change a child's routing and deliver its follow-up in one submission.
+    RerouteAgent {
+        communication: InterAgentCommunication,
+        start_options: TurnStartOptions,
+        thread_settings: ThreadSettingsOverrides,
+        reply: oneshot::Sender<CodexResult<AgentRerouteOutcome>>,
     },
 
     /// Approve a command execution
@@ -941,6 +959,7 @@ impl Op {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Interrupt => "interrupt",
+            Self::InterruptAndWait { .. } => "interrupt_and_wait",
             Self::CleanBackgroundTerminals => "clean_background_terminals",
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
@@ -954,6 +973,7 @@ impl Op {
             Self::ThreadSettings { .. } => "thread_settings",
             Self::TurnSettings { .. } => "turn_settings",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
+            Self::RerouteAgent { .. } => "reroute_agent",
             Self::ExecApproval { .. } => "exec_approval",
             Self::PatchApproval { .. } => "patch_approval",
             Self::ResolveElicitation { .. } => "resolve_elicitation",
@@ -4214,6 +4234,9 @@ pub struct CollabAgentSpawnBeginEvent {
     pub prompt: String,
     pub model: String,
     pub reasoning_effort: ReasoningEffortConfig,
+    /// Routing captured when this activity was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -4226,6 +4249,9 @@ pub struct CollabAgentRef {
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
     #[serde(default, alias = "agent_type", skip_serializing_if = "Option::is_none")]
     pub agent_role: Option<String>,
+    /// Routing captured for this interaction, independent of later thread settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -4240,6 +4266,9 @@ pub struct CollabAgentStatusEntry {
     pub agent_role: Option<String>,
     /// Last known status of the agent.
     pub status: AgentStatus,
+    /// Routing captured for the execution that produced `status`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4267,6 +4296,9 @@ pub struct CollabAgentSpawnEndEvent {
     pub reasoning_effort: ReasoningEffortConfig,
     /// Last known status of the new agent reported to the sender agent.
     pub status: AgentStatus,
+    /// Routing captured when this activity was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4282,6 +4314,9 @@ pub struct CollabAgentInteractionBeginEvent {
     /// Prompt sent from the sender to the receiver. Can be empty to prevent CoT
     /// leaking at the beginning.
     pub prompt: String,
+    /// Routing captured when this activity was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4305,6 +4340,9 @@ pub struct CollabAgentInteractionEndEvent {
     pub prompt: String,
     /// Last known status of the receiver agent reported to the sender agent.
     pub status: AgentStatus,
+    /// Routing captured when this activity was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -4327,6 +4365,10 @@ pub struct SubAgentActivityEvent {
     /// Canonical v2 path of the affected sub-agent.
     pub agent_path: AgentPath,
     pub kind: SubAgentActivityKind,
+    /// Routing captured for this activity; completion uses the finishing turn's routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4342,6 +4384,10 @@ pub struct CollabWaitingBeginEvent {
     pub receiver_agents: Vec<CollabAgentRef>,
     /// ID of the waiting call.
     pub call_id: String,
+    /// Statuses known when the wait began, so each receiver's captured routing
+    /// is paired with a status from the start.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub statuses: HashMap<ThreadId, AgentStatus>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4369,6 +4415,9 @@ pub struct CollabCloseBeginEvent {
     pub sender_thread_id: ThreadId,
     /// Thread ID of the receiver.
     pub receiver_thread_id: ThreadId,
+    /// Routing captured when this activity was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4390,6 +4439,9 @@ pub struct CollabCloseEndEvent {
     /// Last known status of the receiver agent reported to the sender agent before
     /// the close.
     pub status: AgentStatus,
+    /// Routing captured when this activity was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4408,6 +4460,9 @@ pub struct CollabResumeBeginEvent {
     /// Optional role assigned to the receiver agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub receiver_agent_role: Option<String>,
+    /// Routing captured when this activity was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -4429,6 +4484,9 @@ pub struct CollabResumeEndEvent {
     /// Last known status of the receiver agent reported to the sender agent after
     /// resume.
     pub status: AgentStatus,
+    /// Routing captured when this activity was emitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<crate::items::SubAgentRouting>,
 }
 
 #[cfg(test)]

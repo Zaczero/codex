@@ -42,6 +42,9 @@ use crate::exec_events::McpToolCallStatus as ExecMcpToolCallStatus;
 use crate::exec_events::PatchApplyStatus as ExecPatchApplyStatus;
 use crate::exec_events::PatchChangeKind as ExecPatchChangeKind;
 use crate::exec_events::ReasoningItem;
+use crate::exec_events::SubAgentActivityItem;
+use crate::exec_events::SubAgentActivityKind;
+use crate::exec_events::SubAgentRouting;
 use crate::exec_events::ThreadErrorEvent;
 use crate::exec_events::ThreadEvent;
 use crate::exec_events::ThreadItem as ExecThreadItem;
@@ -54,6 +57,13 @@ use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
+
+fn sub_agent_routing(routing: codex_app_server_protocol::SubAgentRouting) -> SubAgentRouting {
+    SubAgentRouting {
+        model: routing.model,
+        reasoning_effort: routing.reasoning_effort,
+    }
+}
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
@@ -237,6 +247,8 @@ impl EventProcessorWithJsonOutput {
                 sender_thread_id,
                 receiver_thread_ids,
                 prompt,
+                model,
+                reasoning_effort,
                 agents_states,
                 status,
                 ..
@@ -250,13 +262,15 @@ impl EventProcessorWithJsonOutput {
                         | CollabAgentTool::ListAgents => return None,
                         CollabAgentTool::SpawnAgent => CollabTool::SpawnAgent,
                         CollabAgentTool::SendInput => CollabTool::SendInput,
-                        CollabAgentTool::ResumeAgent => CollabTool::Wait,
+                        CollabAgentTool::ResumeAgent => CollabTool::ResumeAgent,
                         CollabAgentTool::Wait => CollabTool::Wait,
                         CollabAgentTool::CloseAgent => CollabTool::CloseAgent,
                     },
                     sender_thread_id,
                     receiver_thread_ids,
                     prompt,
+                    model,
+                    reasoning_effort,
                     agents_states: agents_states
                         .into_iter()
                         .map(|(thread_id, state)| {
@@ -287,6 +301,7 @@ impl EventProcessorWithJsonOutput {
                                         }
                                     },
                                     message: state.message,
+                                    routing: state.routing.map(sub_agent_routing),
                                 },
                             )
                         })
@@ -297,6 +312,34 @@ impl EventProcessorWithJsonOutput {
                         CollabAgentToolCallStatus::Failed => CollabToolCallStatus::Failed,
                         CollabAgentToolCallStatus::Interrupted => return None,
                     },
+                }),
+            }),
+            ThreadItem::SubAgentActivity {
+                kind,
+                agent_thread_id,
+                agent_path,
+                routing,
+                ..
+            } => Some(ExecThreadItem {
+                id: make_id(),
+                details: ThreadItemDetails::SubAgentActivity(SubAgentActivityItem {
+                    kind: match kind {
+                        codex_app_server_protocol::SubAgentActivityKind::Started => {
+                            SubAgentActivityKind::Started
+                        }
+                        codex_app_server_protocol::SubAgentActivityKind::Interacted => {
+                            SubAgentActivityKind::Interacted
+                        }
+                        codex_app_server_protocol::SubAgentActivityKind::Interrupted => {
+                            SubAgentActivityKind::Interrupted
+                        }
+                        codex_app_server_protocol::SubAgentActivityKind::Completed => {
+                            SubAgentActivityKind::Completed
+                        }
+                    },
+                    agent_thread_id,
+                    agent_path,
+                    routing: routing.map(sub_agent_routing),
                 }),
             }),
             ThreadItem::WebSearch(item) => Some(ExecThreadItem {

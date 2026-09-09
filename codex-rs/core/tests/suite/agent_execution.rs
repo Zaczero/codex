@@ -16,6 +16,7 @@ use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::submit_thread_settings;
@@ -29,7 +30,7 @@ use test_case::test_case;
 const FIRST_PROMPT: &str = "spawn the first worker";
 const FIRST_TASK: &str = "first worker task";
 const SECOND_TASK: &str = "second worker task";
-const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const MULTI_AGENT_V2_NAMESPACE: &str = "codex_agents";
 
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     serde_json::from_slice::<serde_json::Value>(&request.body)
@@ -56,9 +57,9 @@ async fn mount_root_collaboration_call(
     call_id: &'static str,
     tool_name: &'static str,
     arguments: serde_json::Value,
-) {
+) -> ResponseMock {
     let response_id = format!("resp-{call_id}");
-    mount_sse_once_match(
+    let request = mount_sse_once_match(
         server,
         move |request: &wiremock::Request| body_contains(request, prompt),
         sse(vec![
@@ -85,6 +86,7 @@ async fn mount_root_collaboration_call(
         ]),
     )
     .await;
+    request
 }
 
 async fn mount_completed_worker(
@@ -202,6 +204,141 @@ async fn v2_nested_spawn_checks_shared_active_execution_capacity() -> Result<()>
     );
     assert_eq!(test.thread_manager.list_thread_ids().await.len(), 2);
 
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum FollowupState {
+    Idle,
+    BusyWithMail,
+}
+
+#[test_case(FollowupState::Idle; "idle")]
+#[test_case(FollowupState::BusyWithMail; "busy_with_queued_mail")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn routing_followup_preserves_child_history_and_changes_the_outbound_request(
+    state: FollowupState,
+) -> Result<()> {
+    const FOLLOWUP_PROMPT: &str = "change the existing worker routing";
+    const FOLLOWUP_TASK: &str = "continue with the new routing";
+    const PENDING_TASK: &str = "queued work must use the same new routing";
+    let server = start_mock_server().await;
+    let spawn_request = mount_root_collaboration_call(
+        &server, FIRST_PROMPT, "routing-spawn", "spawn_agent",
+        json!({"message": FIRST_TASK, "task_name": "first", "fork_turns": "none", "model": "gpt-5.4", "reasoning_effort": "low"}),
+    ).await;
+    let started = std::sync::Arc::new(tokio::sync::Notify::new());
+    let request_started = started.clone();
+    let initial = core_test_support::responses::mount_response_once_match(
+        &server,
+        move |request: &wiremock::Request| {
+            let matches = body_contains(request, FIRST_TASK)
+                && !has_function_call_output(request, "routing-spawn");
+            if matches {
+                request_started.notify_one();
+            }
+            matches
+        },
+        core_test_support::responses::sse_response(sse(vec![
+            ev_response_created("routing-initial"),
+            ev_assistant_message("routing-initial-message", "worker completed"),
+            ev_completed("routing-initial"),
+        ]))
+        .set_delay(match state {
+            FollowupState::Idle => Duration::ZERO,
+            FollowupState::BusyWithMail => Duration::from_secs(60),
+        }),
+    )
+    .await;
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        for feature in [Feature::Collab, Feature::MultiAgentV2] {
+            config
+                .features
+                .enable(feature)
+                .expect("enable collaboration");
+        }
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(FIRST_PROMPT).await?;
+    let worker_id = created.recv().await?;
+    let worker = test.thread_manager.get_thread(worker_id).await?;
+    tokio::time::timeout(Duration::from_secs(10), started.notified()).await?;
+    if matches!(state, FollowupState::Idle) {
+        wait_for_event(worker.as_ref(), |event| {
+            matches!(event, EventMsg::TurnComplete(_))
+        })
+        .await;
+    }
+    let followup_request = mount_root_collaboration_call(
+        &server, FOLLOWUP_PROMPT, "routing-followup", "followup_task",
+        json!({"target": "first", "message": FOLLOWUP_TASK, "model": "gpt-5.4-mini", "reasoning_effort": "high"}),
+    ).await;
+    let followup = mount_completed_worker(
+        &server,
+        match state {
+            FollowupState::Idle => FOLLOWUP_TASK,
+            FollowupState::BusyWithMail => PENDING_TASK,
+        },
+        "routing-followup",
+    )
+    .await;
+    if matches!(state, FollowupState::BusyWithMail) {
+        worker
+            .submit(codex_protocol::protocol::Op::InterAgentCommunication {
+                communication: codex_protocol::protocol::InterAgentCommunication::new(
+                    codex_protocol::AgentPath::root(),
+                    codex_protocol::AgentPath::from_string("/root/first".to_string())
+                        .expect("valid worker path"),
+                    Vec::new(),
+                    PENDING_TASK.to_string(),
+                    /*trigger_turn*/ true,
+                ),
+                start_options: Default::default(),
+            })
+            .await?;
+    }
+    test.submit_turn(FOLLOWUP_PROMPT).await?;
+    wait_for_event(worker.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let initial_request = initial.single_request();
+    let request = followup.single_request();
+    for root_request in [
+        spawn_request.single_request(),
+        followup_request.single_request(),
+    ] {
+        let body = root_request.body_json();
+        assert!(
+            body["tools"]
+                .as_array()
+                .expect("tools")
+                .iter()
+                .all(|tool| { tool["name"] != "collaboration" })
+        );
+        for name in ["spawn_agent", "followup_task"] {
+            let tool = namespace_child_tool(&body, "codex_agents", name)
+                .expect("extended agent tool in a custom namespace");
+            for field in ["model", "reasoning_effort"] {
+                assert_eq!(tool["parameters"]["properties"][field]["type"], "string");
+            }
+        }
+    }
+    assert_eq!(initial_request.body_json()["model"], "gpt-5.4");
+    assert_eq!(request.body_json()["model"], "gpt-5.4-mini");
+    assert_eq!(request.body_json()["reasoning"]["effort"], "high");
+    assert_eq!(
+        request.body_json()["client_metadata"]["thread_id"],
+        json!(worker_id)
+    );
+    assert!(request.body_contains_text(FIRST_TASK));
+    match state {
+        FollowupState::Idle => assert!(request.body_contains_text("worker completed")),
+        FollowupState::BusyWithMail => assert!(request.body_contains_text(PENDING_TASK)),
+    }
+    assert!(request.body_contains_text(FOLLOWUP_TASK));
+    assert_eq!(test.thread_manager.list_thread_ids().await.len(), 2);
     Ok(())
 }
 

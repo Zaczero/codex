@@ -27,6 +27,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
@@ -43,6 +44,43 @@ use super::ToolRouter;
 use super::tool_log_payload;
 
 struct ExtensionEchoContributor;
+
+#[test_case::test_case(Some("codex_agents"), Some("codex_agents"), ToolCallSource::DirectPlaintextMessage; "default namespace")]
+#[test_case::test_case(Some("review_team"), Some("review_team"), ToolCallSource::DirectPlaintextMessage; "configured namespace")]
+#[test_case::test_case(None, None, ToolCallSource::DirectPlaintextMessage; "unnamespaced tools")]
+#[test_case::test_case(Some("review_team"), Some("other_tools"), ToolCallSource::Direct; "unrelated namespace")]
+#[tokio::test]
+async fn direct_source_preserves_message_encryption_in_the_resolved_namespace(
+    configured_namespace: Option<&str>,
+    call_namespace: Option<&str>,
+    plaintext_source: ToolCallSource,
+) {
+    let (_, mut turn) = make_session_and_context().await;
+    turn.multi_agent_version = MultiAgentVersion::V2;
+    Arc::make_mut(&mut turn.config)
+        .multi_agent_v2
+        .tool_namespace = configured_namespace.map(str::to_owned);
+    for name in ["spawn_agent", "send_message", "followup_task"] {
+        for (encrypted_function_args, expected) in [
+            (None, ToolCallSource::Direct),
+            (Some(Vec::new()), plaintext_source.clone()),
+            (Some(vec!["message".to_string()]), ToolCallSource::Direct),
+        ] {
+            let call = ToolRouter::build_tool_call(ResponseItem::FunctionCall {
+                id: None,
+                name: name.to_string(),
+                namespace: call_namespace.map(str::to_owned),
+                call_id: "call-message".to_string(),
+                arguments: "{}".to_string(),
+                encrypted_function_args,
+                internal_chat_message_metadata_passthrough: None,
+            })
+            .expect("valid call")
+            .expect("function call");
+            assert_eq!(call.direct_source(&turn), expected);
+        }
+    }
+}
 
 #[test]
 fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
@@ -228,7 +266,8 @@ async fn build_tool_call_uses_namespace_for_registry_name() -> anyhow::Result<()
     );
     assert_eq!(call.call_id, "call-namespace");
     assert_eq!(call.encrypted_function_args, Some(Vec::new()));
-    assert_eq!(call.direct_source(), ToolCallSource::Direct);
+    let (_, turn) = make_session_and_context().await;
+    assert_eq!(call.direct_source(&turn), ToolCallSource::Direct);
     match call.payload {
         ToolPayload::Function { arguments } => {
             assert_eq!(arguments, "{}");

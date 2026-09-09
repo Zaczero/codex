@@ -465,6 +465,7 @@ export type { SortDirection } from "./SortDirection";
 export type { SpendControlLimitSnapshot } from "./SpendControlLimitSnapshot";
 export type { StrictReviewRequiredNotification } from "./StrictReviewRequiredNotification";
 export type { SubAgentActivityKind } from "./SubAgentActivityKind";
+export type { SubAgentRouting } from "./SubAgentRouting";
 export type { SubagentMigration } from "./SubagentMigration";
 export type { TerminalInteractionNotification } from "./TerminalInteractionNotification";
 export type { TextElement } from "./TextElement";

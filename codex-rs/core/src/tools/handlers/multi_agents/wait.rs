@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::status::AgentStatusSnapshot;
 use crate::agent::status::is_final;
 use crate::session::session::Session;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
@@ -67,6 +68,7 @@ impl Handler {
         let args: WaitArgs = parse_arguments(&arguments)?;
         let receiver_thread_ids = parse_agent_id_targets(args.targets)?;
         let mut receiver_agents = Vec::with_capacity(receiver_thread_ids.len());
+        let mut initial_states = HashMap::with_capacity(receiver_thread_ids.len());
         let mut target_by_thread_id = HashMap::with_capacity(receiver_thread_ids.len());
         for receiver_thread_id in &receiver_thread_ids {
             let agent_metadata = session
@@ -82,10 +84,27 @@ impl Handler {
                     .map(ToString::to_string)
                     .unwrap_or_else(|| receiver_thread_id.to_string()),
             );
+            let state = session
+                .services
+                .agent_control
+                .get_status_snapshot(*receiver_thread_id)
+                .await;
+            let routing = match state.routing {
+                Some(routing) => Some(routing),
+                None => {
+                    session
+                        .services
+                        .agent_control
+                        .get_agent_routing(*receiver_thread_id)
+                        .await
+                }
+            };
+            initial_states.insert(*receiver_thread_id, state.status);
             receiver_agents.push(CollabAgentRef {
                 thread_id: *receiver_thread_id,
                 agent_nickname: agent_metadata.agent_nickname,
                 agent_role: agent_metadata.agent_role,
+                routing,
             });
         }
 
@@ -112,7 +131,7 @@ impl Handler {
                     prompt: None,
                     model: None,
                     reasoning_effort: None,
-                    agents_states: Default::default(),
+                    agents_states: initial_states,
                 }),
             )
             .await;
@@ -123,17 +142,24 @@ impl Handler {
             match session.services.agent_control.subscribe_status(*id).await {
                 Ok(rx) => {
                     let status = rx.borrow().clone();
-                    if is_final(&status) {
+                    if is_final(&status.status) {
                         initial_final_statuses.push((*id, status));
                     }
                     status_rxs.push((*id, rx));
                 }
                 Err(err) if matches!(err.details(), CodexErrorDetails::ThreadNotFound(_)) => {
-                    initial_final_statuses.push((*id, AgentStatus::NotFound));
+                    initial_final_statuses.push((*id, AgentStatus::NotFound.into()));
                 }
                 Err(err) => {
                     let mut statuses = HashMap::with_capacity(1);
-                    statuses.insert(*id, session.services.agent_control.get_status(*id).await);
+                    statuses.insert(
+                        *id,
+                        session
+                            .services
+                            .agent_control
+                            .get_status_snapshot(*id)
+                            .await,
+                    );
                     session
                         .emit_turn_item_completed(
                             &turn,
@@ -147,7 +173,10 @@ impl Handler {
                                 prompt: None,
                                 model: None,
                                 reasoning_effort: None,
-                                agents_states: statuses,
+                                agents_states: statuses
+                                    .into_iter()
+                                    .map(|(id, state)| (id, state.status))
+                                    .collect(),
                             }),
                         )
                         .await;
@@ -216,7 +245,10 @@ impl Handler {
                     prompt: None,
                     model: None,
                     reasoning_effort: None,
-                    agents_states: statuses_by_id,
+                    agents_states: statuses_by_id
+                        .into_iter()
+                        .map(|(id, state)| (id, state.status))
+                        .collect(),
                 }),
             )
             .await;
@@ -225,11 +257,15 @@ impl Handler {
     }
 }
 
-fn wait_tool_call_status(statuses: &HashMap<ThreadId, AgentStatus>) -> CollabAgentToolCallStatus {
-    if statuses
-        .values()
-        .any(|status| matches!(status, AgentStatus::Errored(_) | AgentStatus::NotFound))
-    {
+fn wait_tool_call_status(
+    statuses: &HashMap<ThreadId, AgentStatusSnapshot>,
+) -> CollabAgentToolCallStatus {
+    if statuses.values().any(|state| {
+        matches!(
+            state.status,
+            AgentStatus::Errored(_) | AgentStatus::NotFound
+        )
+    }) {
         CollabAgentToolCallStatus::Failed
     } else {
         CollabAgentToolCallStatus::Completed
@@ -237,7 +273,7 @@ fn wait_tool_call_status(statuses: &HashMap<ThreadId, AgentStatus>) -> CollabAge
 }
 
 fn wait_receiver_agents(
-    statuses: &HashMap<ThreadId, AgentStatus>,
+    statuses: &HashMap<ThreadId, AgentStatusSnapshot>,
     receiver_agents: &[CollabAgentRef],
 ) -> Vec<CollabAgentRef> {
     if statuses.is_empty() {
@@ -248,8 +284,10 @@ fn wait_receiver_agents(
     let mut seen = HashMap::with_capacity(receiver_agents.len());
     for receiver_agent in receiver_agents {
         seen.insert(receiver_agent.thread_id, ());
-        if statuses.contains_key(&receiver_agent.thread_id) {
-            agents.push(receiver_agent.clone());
+        if let Some(state) = statuses.get(&receiver_agent.thread_id) {
+            let mut agent = receiver_agent.clone();
+            agent.routing.clone_from(&state.routing);
+            agents.push(agent);
         }
     }
 
@@ -260,6 +298,9 @@ fn wait_receiver_agents(
             thread_id: *thread_id,
             agent_nickname: None,
             agent_role: None,
+            routing: statuses
+                .get(thread_id)
+                .and_then(|state| state.routing.clone()),
         })
         .collect::<Vec<_>>();
     extras.sort_by_key(|agent| agent.thread_id.to_string());
@@ -282,7 +323,7 @@ struct WaitArgs {
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct WaitAgentResult {
-    pub(crate) status: HashMap<String, AgentStatus>,
+    pub(crate) status: HashMap<String, AgentStatusSnapshot>,
     pub(crate) timed_out: bool,
 }
 
@@ -307,20 +348,20 @@ impl ToolOutput for WaitAgentResult {
 async fn wait_for_final_status(
     session: Arc<Session>,
     thread_id: ThreadId,
-    mut status_rx: Receiver<AgentStatus>,
-) -> Option<(ThreadId, AgentStatus)> {
+    mut status_rx: Receiver<AgentStatusSnapshot>,
+) -> Option<(ThreadId, AgentStatusSnapshot)> {
     let mut status = status_rx.borrow().clone();
-    if is_final(&status) {
+    if is_final(&status.status) {
         return Some((thread_id, status));
     }
 
     loop {
         if status_rx.changed().await.is_err() {
-            let latest = session.services.agent_control.get_status(thread_id).await;
-            return is_final(&latest).then_some((thread_id, latest));
+            status.status = session.services.agent_control.get_status(thread_id).await;
+            return is_final(&status.status).then_some((thread_id, status));
         }
         status = status_rx.borrow().clone();
-        if is_final(&status) {
+        if is_final(&status.status) {
             return Some((thread_id, status));
         }
     }

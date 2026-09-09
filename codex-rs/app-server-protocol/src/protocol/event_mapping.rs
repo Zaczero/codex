@@ -187,6 +187,7 @@ pub fn item_event_to_server_notification(
                 kind: activity.kind.into(),
                 agent_thread_id: activity.agent_thread_id.to_string(),
                 agent_path: String::from(activity.agent_path),
+                routing: activity.routing.map(Into::into),
             };
             ServerNotification::ItemCompleted(ItemCompletedNotification {
                 thread_id,
@@ -511,6 +512,7 @@ mod tests {
     #[test]
     fn collab_resume_begin_maps_to_item_started_resume_agent() {
         let event = CollabResumeBeginEvent {
+            routing: None,
             call_id: "call-1".to_string(),
             started_at_ms: 123,
             sender_thread_id: ThreadId::new(),
@@ -548,6 +550,7 @@ mod tests {
     #[test]
     fn collab_resume_end_maps_to_item_completed_resume_agent() {
         let event = CollabResumeEndEvent {
+            routing: None,
             call_id: "call-2".to_string(),
             completed_at_ms: 456,
             sender_thread_id: ThreadId::new(),

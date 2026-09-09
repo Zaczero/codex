@@ -53,6 +53,11 @@ async fn handle_resume_agent(
         .get_agent_metadata(receiver_thread_id)
         .unwrap_or_default();
     let child_depth = next_thread_spawn_depth(&turn.session_source);
+    let mut routing = session
+        .services
+        .agent_control
+        .get_agent_routing(receiver_thread_id)
+        .await;
     let max_depth = turn.config.agent_max_depth;
     if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
         return Err(FunctionCallError::RespondToModel(
@@ -73,10 +78,13 @@ async fn handle_resume_agent(
                     thread_id: receiver_thread_id,
                     agent_nickname: receiver_agent.agent_nickname.clone(),
                     agent_role: receiver_agent.agent_role.clone(),
+                    routing: routing.clone(),
                 }],
                 prompt: None,
-                model: None,
-                reasoning_effort: None,
+                model: routing.as_ref().map(|routing| routing.model.clone()),
+                reasoning_effort: routing
+                    .as_ref()
+                    .and_then(|routing| routing.reasoning_effort.clone()),
                 agents_states: Default::default(),
             }),
         )
@@ -123,6 +131,11 @@ async fn handle_resume_agent(
     } else {
         (receiver_agent, None)
     };
+    routing = session
+        .services
+        .agent_control
+        .get_agent_routing(receiver_thread_id)
+        .await;
     session
         .emit_turn_item_completed(
             &turn,
@@ -136,10 +149,13 @@ async fn handle_resume_agent(
                     thread_id: receiver_thread_id,
                     agent_nickname: receiver_agent.agent_nickname,
                     agent_role: receiver_agent.agent_role,
+                    routing: routing.clone(),
                 }],
                 prompt: None,
-                model: None,
-                reasoning_effort: None,
+                model: routing.as_ref().map(|routing| routing.model.clone()),
+                reasoning_effort: routing
+                    .as_ref()
+                    .and_then(|routing| routing.reasoning_effort.clone()),
                 agents_states: [(receiver_thread_id, status.clone())].into_iter().collect(),
             }),
         )
@@ -151,7 +167,7 @@ async fn handle_resume_agent(
     turn.session_telemetry
         .counter("codex.multi_agent.resume", /*inc*/ 1, &[]);
 
-    Ok(ResumeAgentResult { status })
+    Ok(ResumeAgentResult { status, routing })
 }
 
 impl CoreToolRuntime for Handler {
@@ -168,6 +184,7 @@ struct ResumeAgentArgs {
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct ResumeAgentResult {
     pub(crate) status: AgentStatus,
+    pub(crate) routing: Option<codex_protocol::items::SubAgentRouting>,
 }
 
 impl ToolOutput for ResumeAgentResult {

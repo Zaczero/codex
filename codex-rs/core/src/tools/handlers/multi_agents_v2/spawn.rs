@@ -14,6 +14,7 @@ use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::items::SubAgentRouting;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ToolSpec;
 
@@ -206,6 +207,12 @@ async fn handle_spawn_agent(
         } else {
             None
         };
+    // The config is what the child will run on once its role and defaults are applied; the
+    // thread's own snapshot is not guaranteed to be readable this early in its startup.
+    let routing = config.model.clone().map(|model| SubAgentRouting {
+        model,
+        reasoning_effort: config.model_reasoning_effort.clone(),
+    });
     let spawned_agent = Box::pin(
         session
             .services
@@ -236,6 +243,13 @@ async fn handle_spawn_agent(
         .agent_control
         .get_agent_config_snapshot(new_thread_id)
         .await;
+    let routing = agent_snapshot
+        .as_ref()
+        .map(|snapshot| SubAgentRouting {
+            model: snapshot.model.clone(),
+            reasoning_effort: snapshot.reasoning_effort.clone(),
+        })
+        .or(routing);
     let nickname = agent_snapshot
         .as_ref()
         .and_then(|snapshot| snapshot.session_source.get_nickname())
@@ -248,6 +262,7 @@ async fn handle_spawn_agent(
             agent_thread_id: new_thread_id,
             agent_path: new_agent_path.clone(),
             kind: SubAgentActivityKind::Started,
+            routing: routing.clone(),
         },
     )
     .await;
@@ -266,6 +281,8 @@ async fn handle_spawn_agent(
         SpawnAgentResult::WithNickname {
             task_name,
             nickname,
+            model: routing.as_ref().map(|routing| routing.model.clone()),
+            reasoning_effort: routing.and_then(|routing| routing.reasoning_effort),
         }
     };
     Ok((output, new_thread_id, agent_status, agent_snapshot))
@@ -332,6 +349,9 @@ pub(crate) enum SpawnAgentResult {
     WithNickname {
         task_name: String,
         nickname: Option<String>,
+        /// Model the child actually runs on after role and default resolution.
+        model: Option<String>,
+        reasoning_effort: Option<ReasoningEffort>,
     },
     HiddenMetadata {
         task_name: String,

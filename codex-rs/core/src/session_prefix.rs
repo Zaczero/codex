@@ -20,6 +20,7 @@ pub(crate) fn format_inter_agent_completion_message(
     task_name: AgentPath,
     sender: AgentPath,
     status: &AgentStatus,
+    routing: Option<codex_protocol::items::SubAgentRouting>,
 ) -> Option<String> {
     let payload = match status {
         AgentStatus::Completed(Some(message)) => message.clone(),
@@ -32,7 +33,7 @@ pub(crate) fn format_inter_agent_completion_message(
         AgentStatus::NotFound => "Agent was not found.".to_string(),
         AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted => return None,
     };
-    Some(InterAgentCompletionMessage::new(task_name, sender, payload).render())
+    Some(InterAgentCompletionMessage::new(task_name, sender, payload, routing).render())
 }
 
 #[cfg(test)]

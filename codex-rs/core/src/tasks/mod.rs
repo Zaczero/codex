@@ -507,6 +507,18 @@ impl Session {
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
+        let interrupted = reason == TurnAbortReason::Interrupted;
+        let aborted = self.abort_tasks_for_transition(reason).await;
+        if interrupted && aborted {
+            self.maybe_start_turn_for_pending_work().await;
+        }
+    }
+
+    /// Tear down the current turn without starting queued mail between transition steps.
+    pub(crate) async fn abort_tasks_for_transition(
+        self: &Arc<Self>,
+        reason: TurnAbortReason,
+    ) -> bool {
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
@@ -532,9 +544,7 @@ impl Session {
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             self.input_queue.clear_pending(&active_turn).await;
         }
-        if reason == TurnAbortReason::Interrupted && aborted_turn {
-            self.maybe_start_turn_for_pending_work().await;
-        }
+        aborted_turn
     }
 
     pub(crate) async fn abort_turn_if_active(
@@ -904,10 +914,6 @@ impl Session {
         turn_state: &Mutex<TurnState>,
     ) {
         let sub_id = task.turn_context.sub_id.clone();
-        if task.cancellation_token.is_cancelled() {
-            return;
-        }
-
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
         if reason == TurnAbortReason::Interrupted
@@ -936,6 +942,7 @@ impl Session {
         }
 
         task.handle.abort();
+        let _ = task.handle.await;
 
         session_task
             .abort(Arc::clone(self), Arc::clone(&task.turn_context))

@@ -60,6 +60,11 @@ impl Handler {
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
         }
         let receiver_agent = receiver_agent.unwrap_or_default();
+        let routing = session
+            .services
+            .agent_control
+            .get_agent_routing(receiver_thread_id)
+            .await;
         if args.interrupt {
             session
                 .services
@@ -79,8 +84,10 @@ impl Handler {
                     receiver_thread_ids: vec![receiver_thread_id],
                     receiver_agents: Vec::new(),
                     prompt: Some(prompt.clone()),
-                    model: None,
-                    reasoning_effort: None,
+                    model: routing.as_ref().map(|routing| routing.model.clone()),
+                    reasoning_effort: routing
+                        .as_ref()
+                        .and_then(|routing| routing.reasoning_effort.clone()),
                     agents_states: Default::default(),
                 }),
             )
@@ -117,17 +124,23 @@ impl Handler {
                         thread_id: receiver_thread_id,
                         agent_nickname: receiver_agent.agent_nickname,
                         agent_role: receiver_agent.agent_role,
+                        routing: routing.clone(),
                     }],
                     prompt: Some(prompt),
-                    model: None,
-                    reasoning_effort: None,
+                    model: routing.as_ref().map(|routing| routing.model.clone()),
+                    reasoning_effort: routing
+                        .as_ref()
+                        .and_then(|routing| routing.reasoning_effort.clone()),
                     agents_states: [(receiver_thread_id, status)].into_iter().collect(),
                 }),
             )
             .await;
         let submission_id = result?;
 
-        Ok(boxed_tool_output(SendInputResult { submission_id }))
+        Ok(boxed_tool_output(SendInputResult {
+            submission_id,
+            routing,
+        }))
     }
 }
 
@@ -149,6 +162,7 @@ struct SendInputArgs {
 #[derive(Debug, Serialize)]
 pub(crate) struct SendInputResult {
     submission_id: String,
+    routing: Option<codex_protocol::items::SubAgentRouting>,
 }
 
 impl ToolOutput for SendInputResult {

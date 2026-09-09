@@ -120,7 +120,10 @@ pub(crate) type ThreadIdGenerator = Arc<dyn Fn() -> ThreadId + Send + Sync>;
 // small subset of ops they inspect.
 fn capture_test_op(op: &Op) -> Option<Op> {
     match op {
-        Op::Interrupt => Some(Op::Interrupt),
+        Op::Interrupt | Op::InterruptAndWait { .. } => Some(Op::Interrupt),
+        Op::ThreadSettings { thread_settings } => Some(Op::ThreadSettings {
+            thread_settings: thread_settings.clone(),
+        }),
         Op::InterAgentCommunication {
             communication,
             start_options,

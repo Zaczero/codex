@@ -617,6 +617,7 @@ fn collab_agent_state_maps_interrupted_status() {
     assert_eq!(
         CollabAgentState::from(CoreAgentStatus::Interrupted),
         CollabAgentState {
+            routing: None,
             status: CollabAgentStatus::Interrupted,
             message: None,
         }
@@ -3330,6 +3331,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             agents_states: [(
                 receiver_thread_id.to_string(),
                 CollabAgentState {
+                    routing: None,
                     status: CollabAgentStatus::Completed,
                     message: None,
                 },
@@ -3346,6 +3348,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         agent_path: codex_protocol::AgentPath::root()
             .join("worker")
             .expect("worker path"),
+        routing: None,
     });
 
     assert_eq!(
@@ -3355,6 +3358,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
             kind: SubAgentActivityKind::Completed,
             agent_thread_id: receiver_thread_id.to_string(),
             agent_path: "/root/worker".to_string(),
+            routing: None,
         }
     );
 

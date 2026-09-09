@@ -1,4 +1,5 @@
 use codex_protocol::models::WebSearchAction;
+use codex_protocol::openai_models::ReasoningEffort;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -122,6 +123,9 @@ pub enum ThreadItemDetails {
     /// Represents a call to a collab tool. The item starts when the collab tool is
     /// invoked and completes when the collab tool reports success or failure.
     CollabToolCall(CollabToolCallItem),
+    /// Records a sub-agent lifecycle change (spawn, interaction, interrupt, or
+    /// completion) together with the model and effort that handled it.
+    SubAgentActivity(SubAgentActivityItem),
     /// Captures a web search request. It starts when the search is kicked off
     /// and completes when results are returned to the agent.
     WebSearch(WebSearchItem),
@@ -223,8 +227,16 @@ pub enum CollabToolCallStatus {
 pub enum CollabTool {
     SpawnAgent,
     SendInput,
+    ResumeAgent,
     Wait,
     CloseAgent,
+}
+
+/// Model and reasoning effort captured for a sub-agent interaction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct SubAgentRouting {
+    pub model: String,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 
 /// The status of a collab agent.
@@ -245,6 +257,8 @@ pub enum CollabAgentStatus {
 pub struct CollabAgentState {
     pub status: CollabAgentStatus,
     pub message: Option<String>,
+    /// Routing captured for this agent at the time of the call.
+    pub routing: Option<SubAgentRouting>,
 }
 
 /// A call to a collab tool.
@@ -254,8 +268,32 @@ pub struct CollabToolCallItem {
     pub sender_thread_id: String,
     pub receiver_thread_ids: Vec<String>,
     pub prompt: Option<String>,
+    /// Model captured for a single target agent, when available.
+    pub model: Option<String>,
+    /// Reasoning effort captured for a single target agent, when available.
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub agents_states: HashMap<String, CollabAgentState>,
     pub status: CollabToolCallStatus,
+}
+
+/// What happened to a sub-agent.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SubAgentActivityKind {
+    Started,
+    Interacted,
+    Interrupted,
+    Completed,
+}
+
+/// A sub-agent lifecycle change with the routing that handled it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+pub struct SubAgentActivityItem {
+    pub kind: SubAgentActivityKind,
+    pub agent_thread_id: String,
+    pub agent_path: String,
+    /// Routing for this activity; completion carries the finishing turn's routing.
+    pub routing: Option<SubAgentRouting>,
 }
 
 /// Result payload produced by an MCP tool invocation.

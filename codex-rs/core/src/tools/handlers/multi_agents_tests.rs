@@ -1288,7 +1288,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         agent_role: None,
     });
 
-    let Err(err) = FollowupTaskHandlerV2
+    let Err(err) = FollowupTaskHandlerV2::default()
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
@@ -1813,7 +1813,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         )
         .await;
 
-    FollowupTaskHandlerV2
+    FollowupTaskHandlerV2::default()
         .handle(invocation(
             session,
             turn,
@@ -1859,12 +1859,14 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         AgentPath::root(),
         worker_path.clone(),
         &AgentStatus::Completed(Some("first done".to_string())),
+        Some(first_turn.as_ref().into()),
     )
     .expect("completed status should render");
     let second_notification = format_inter_agent_completion_message(
         AgentPath::root(),
         worker_path.clone(),
         &AgentStatus::Completed(Some("second done".to_string())),
+        Some(second_turn.as_ref().into()),
     )
     .expect("completed status should render");
 
@@ -1907,6 +1909,450 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     .expect("parent should receive one completion notification per child turn");
 
     assert_eq!(notifications.len(), 2);
+}
+
+/// Root plus one spawned v2 worker, with the parent's turn on `gpt-5.4`.
+async fn spawn_v2_worker_on_gpt54() -> (
+    ThreadManager,
+    Arc<crate::session::session::Session>,
+    Arc<TurnContext>,
+    ThreadId,
+) {
+    let (mut session, turn) = make_session_and_context().await;
+    let mut turn = turn
+        .with_model("gpt-5.4".to_string(), &session.services.models_manager)
+        .await;
+    let manager = thread_manager();
+    let mut config = turn.config.as_ref().clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.hide_spawn_agent_metadata = false;
+    set_turn_config(&mut turn, config);
+    let root = manager
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
+        .await
+        .expect("root thread should start");
+    root.thread.session.new_default_turn().await;
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "boot worker",
+                "task_name": "worker",
+                "reasoning_effort": "low"
+            })),
+        ))
+        .await
+        .expect("spawn worker");
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+        .await
+        .expect("worker should resolve");
+    let worker = manager.get_thread(agent_id).await.expect("worker thread");
+    let (reply, settled) = tokio::sync::oneshot::channel();
+    worker
+        .submit(Op::InterruptAndWait { reply })
+        .await
+        .expect("interrupt initial turn");
+    settled.await.expect("initial turn settled");
+    (manager, session, turn, agent_id)
+}
+
+#[derive(Debug, Deserialize, PartialEq)]
+struct FollowupTaskResult {
+    model: String,
+    reasoning_effort: Option<ReasoningEffort>,
+    interrupted: bool,
+}
+
+/// Ops the worker received after its spawn communication, which is itself a triggering message.
+fn worker_op_kinds(manager: &ThreadManager, agent_id: ThreadId) -> Vec<&'static str> {
+    manager
+        .captured_ops()
+        .into_iter()
+        .filter(|(id, _)| *id == agent_id)
+        .skip(1)
+        .map(|(_, op)| match op {
+            Op::ThreadSettings { .. } => "settings",
+            Op::Interrupt => "interrupt",
+            Op::InterAgentCommunication { communication, .. } if communication.trigger_turn => {
+                "followup"
+            }
+            Op::InterAgentCommunication { .. } => "message",
+            _ => "other",
+        })
+        .collect()
+}
+
+async fn wait_for_worker_model(manager: &ThreadManager, agent_id: ThreadId, model: &str) {
+    timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = manager
+                .get_thread(agent_id)
+                .await
+                .expect("worker thread should exist")
+                .config_snapshot()
+                .await;
+            if snapshot.model == model {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("worker settings should apply through its submission queue");
+}
+
+#[tokio::test]
+async fn multi_agent_v2_spawn_result_and_activity_report_resolved_routing() {
+    let (manager, session, turn, agent_id) = spawn_v2_worker_on_gpt54().await;
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "gpt-5.4");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Low));
+
+    let output = SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session,
+            turn,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "second worker",
+                "task_name": "second",
+                "model": "gpt-5.4-mini"
+            })),
+        ))
+        .await
+        .expect("spawn second worker");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("spawn_agent result should be json");
+    assert_eq!(result["model"], "gpt-5.4-mini");
+    assert_eq!(result["reasoning_effort"], "medium");
+}
+
+#[tokio::test]
+async fn multi_agent_v2_followup_task_without_routing_keeps_child_selection() {
+    let (manager, session, turn, agent_id) = spawn_v2_worker_on_gpt54().await;
+    let output = FollowupTaskHandlerV2::default()
+        .handle(invocation(
+            session,
+            turn,
+            "followup_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "message": "continue",
+            })),
+        ))
+        .await
+        .expect("followup_task should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: FollowupTaskResult =
+        serde_json::from_str(&content).expect("followup_task result should be json");
+    assert_eq!(
+        result,
+        FollowupTaskResult {
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some(ReasoningEffort::Low),
+            interrupted: false,
+        }
+    );
+    assert_eq!(worker_op_kinds(&manager, agent_id), vec!["followup"]);
+}
+
+#[tokio::test]
+async fn multi_agent_v2_send_message_reports_routing_without_changing_child_selection() {
+    let (manager, session, turn, agent_id) = spawn_v2_worker_on_gpt54().await;
+    let output = SendMessageHandlerV2
+        .handle(invocation(
+            session,
+            turn,
+            "send_message",
+            function_payload(json!({
+                "target": agent_id.to_string(), "message": "Keep this evidence.",
+            })),
+        ))
+        .await
+        .expect("send message");
+    let (content, _) = expect_text_output(output);
+    assert_eq!(
+        serde_json::from_str::<FollowupTaskResult>(&content).unwrap(),
+        FollowupTaskResult {
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some(ReasoningEffort::Low),
+            interrupted: false,
+        }
+    );
+    assert_eq!(worker_op_kinds(&manager, agent_id), vec!["message"]);
+}
+
+#[tokio::test]
+async fn completion_reports_finishing_turn_routing_after_next_selection_changes() {
+    let (manager, session, turn, agent_id) = spawn_v2_worker_on_gpt54().await;
+    let thread = manager.get_thread(agent_id).await.expect("worker thread");
+    let finishing_turn = thread.session.new_default_turn().await;
+    FollowupTaskHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn,
+            "followup_task",
+            function_payload(json!({
+                "target": agent_id.to_string(), "message": "Use another route next.",
+                "model": "gpt-5.4-mini", "reasoning_effort": "high",
+            })),
+        ))
+        .await
+        .expect("change next turn routing");
+    assert_eq!(thread.config_snapshot().await.model, "gpt-5.4-mini");
+    thread
+        .session
+        .send_event(
+            &finishing_turn,
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: finishing_turn.sub_id.clone(),
+                started_at: None,
+                completed_at: None,
+                duration_ms: None,
+                time_to_first_token_ms: None,
+                error: None,
+                last_agent_message: Some("Result from the original route.".to_string()),
+            }),
+        )
+        .await;
+    assert_eq!(
+        thread.subscribe_status().borrow().clone(),
+        crate::agent::status::AgentStatusSnapshot {
+            status: AgentStatus::Completed(Some("Result from the original route.".to_string())),
+            routing: Some(codex_protocol::items::SubAgentRouting {
+                model: "gpt-5.4".to_string(),
+                reasoning_effort: Some(ReasoningEffort::Low),
+            }),
+        }
+    );
+    let message = manager
+        .captured_ops()
+        .into_iter()
+        .find_map(|(id, op)| match op {
+            Op::InterAgentCommunication { communication, .. }
+                if id == session.thread_id
+                    && communication
+                        .content
+                        .contains("Result from the original route.") =>
+            {
+                Some(communication.content)
+            }
+            _ => None,
+        })
+        .expect("completion delivered to parent");
+    assert!(
+        message.contains("Model: gpt-5.4\nReasoning effort: low\n"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_followup_task_reroutes_idle_child_before_its_turn() {
+    let (manager, session, turn, agent_id) = spawn_v2_worker_on_gpt54().await;
+    let output = FollowupTaskHandlerV2::default()
+        .handle(invocation(
+            session,
+            turn,
+            "followup_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "message": "think harder",
+                "model": "gpt-5.4-mini",
+                "reasoning_effort": "high"
+            })),
+        ))
+        .await
+        .expect("followup_task should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: FollowupTaskResult =
+        serde_json::from_str(&content).expect("followup_task result should be json");
+    assert_eq!(
+        result,
+        FollowupTaskResult {
+            model: "gpt-5.4-mini".to_string(),
+            reasoning_effort: Some(ReasoningEffort::High),
+            interrupted: false,
+        }
+    );
+    wait_for_worker_model(&manager, agent_id, "gpt-5.4-mini").await;
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_followup_task_model_change_takes_model_default_effort() {
+    let (manager, session, turn, agent_id) = spawn_v2_worker_on_gpt54().await;
+    let output = FollowupTaskHandlerV2::default()
+        .handle(invocation(
+            session,
+            turn,
+            "followup_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "message": "switch",
+                "model": "gpt-5.4-mini"
+            })),
+        ))
+        .await
+        .expect("followup_task should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: FollowupTaskResult =
+        serde_json::from_str(&content).expect("followup_task result should be json");
+    assert_eq!(result.model, "gpt-5.4-mini");
+    assert_eq!(result.reasoning_effort, Some(ReasoningEffort::Medium));
+    wait_for_worker_model(&manager, agent_id, "gpt-5.4-mini").await;
+}
+
+#[tokio::test]
+async fn multi_agent_v2_followup_task_interrupts_busy_child_before_applying_routing() {
+    let (manager, session, turn, agent_id) = spawn_v2_worker_on_gpt54().await;
+    let thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist");
+    let child_turn = thread.session.new_default_turn().await;
+    let task = transitions::HeldTask::default();
+    task.release.notify_one();
+    let cleaned = task.cleaned.clone();
+    thread
+        .session
+        .start_task(child_turn, Vec::new(), task)
+        .await;
+
+    let output = FollowupTaskHandlerV2::default()
+        .handle(invocation(
+            session,
+            turn,
+            "followup_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "message": "redo with more effort",
+                "reasoning_effort": "xhigh"
+            })),
+        ))
+        .await
+        .expect("followup_task should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: FollowupTaskResult =
+        serde_json::from_str(&content).expect("followup_task result should be json");
+    assert_eq!(
+        result,
+        FollowupTaskResult {
+            model: "gpt-5.4".to_string(),
+            reasoning_effort: Some(ReasoningEffort::XHigh),
+            interrupted: true,
+        }
+    );
+    assert!(cleaned.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        thread.config_snapshot().await.reasoning_effort,
+        Some(ReasoningEffort::XHigh)
+    );
+}
+
+#[path = "multi_agents_transition_tests.rs"]
+mod transitions;
+
+#[tokio::test]
+async fn multi_agent_v2_followup_task_rejects_invalid_routing_without_touching_child() {
+    let (manager, session, turn, agent_id) = spawn_v2_worker_on_gpt54().await;
+    let unsupported_effort = FollowupTaskHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "followup_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "message": "go",
+                "model": "gpt-5.4-mini",
+                "reasoning_effort": "max"
+            })),
+        ))
+        .await;
+    let Err(unsupported_effort) = unsupported_effort else {
+        panic!("unsupported effort should be rejected");
+    };
+    assert!(
+        unsupported_effort
+            .to_string()
+            .contains("Reasoning effort `max` is not supported for model `gpt-5.4-mini`"),
+        "{unsupported_effort}"
+    );
+    let unknown_model = FollowupTaskHandlerV2::default()
+        .handle(invocation(
+            session,
+            turn,
+            "followup_task",
+            function_payload(json!({
+                "target": agent_id.to_string(),
+                "message": "go",
+                "model": "no-such-model"
+            })),
+        ))
+        .await;
+    let Err(unknown_model) = unknown_model else {
+        panic!("unknown model should be rejected");
+    };
+    assert!(
+        unknown_model
+            .to_string()
+            .contains("Unknown model `no-such-model`"),
+        "{unknown_model}"
+    );
+    assert_eq!(worker_op_kinds(&manager, agent_id), Vec::<&str>::new());
+    let snapshot = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should exist")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "gpt-5.4");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Low));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_list_agents_reports_routing() {
+    let (_manager, session, turn, _agent_id) = spawn_v2_worker_on_gpt54().await;
+    let output = ListAgentsHandlerV2
+        .handle(invocation(
+            session,
+            turn,
+            "list_agents",
+            function_payload(json!({})),
+        ))
+        .await
+        .expect("list_agents should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: serde_json::Value =
+        serde_json::from_str(&content).expect("list_agents result should be json");
+    let worker = result["agents"]
+        .as_array()
+        .expect("agents array")
+        .iter()
+        .find(|agent| agent["agent_name"] == "/root/worker")
+        .expect("worker listed");
+    assert_eq!(worker["model"], "gpt-5.4");
+    assert_eq!(worker["reasoning_effort"], "low");
 }
 
 #[tokio::test]
@@ -1953,7 +2399,7 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
         })),
     );
 
-    let Err(err) = FollowupTaskHandlerV2.handle(invocation).await else {
+    let Err(err) = FollowupTaskHandlerV2::default().handle(invocation).await else {
         panic!("legacy items field should be rejected in v2");
     };
     let FunctionCallError::RespondToModel(message) = err else {
@@ -3183,8 +3629,8 @@ async fn wait_agent_returns_not_found_for_missing_agents() {
         result,
         wait::WaitAgentResult {
             status: HashMap::from([
-                (id_a.to_string(), AgentStatus::NotFound),
-                (id_b.to_string(), AgentStatus::NotFound),
+                (id_a.to_string(), AgentStatus::NotFound.into()),
+                (id_b.to_string(), AgentStatus::NotFound.into()),
             ]),
             timed_out: false
         }
@@ -3318,7 +3764,7 @@ async fn wait_agent_returns_final_status_without_timeout() {
     assert_eq!(
         result,
         wait::WaitAgentResult {
-            status: HashMap::from([(agent_id.to_string(), AgentStatus::Shutdown)]),
+            status: HashMap::from([(agent_id.to_string(), AgentStatus::Shutdown.into())]),
             timed_out: false
         }
     );

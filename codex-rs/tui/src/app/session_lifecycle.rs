@@ -81,24 +81,28 @@ impl App {
                     if !entry.is_running || entry.is_closed {
                         return None;
                     }
-                    Some((thread_id, entry.agent_path.as_deref()?.trim().to_string()))
+                    Some((
+                        thread_id,
+                        entry.agent_path.as_deref()?.trim().to_string(),
+                        entry.routing.clone(),
+                    ))
                 })
                 .collect();
             let mut entries = Vec::new();
-            for (thread_id, agent_path) in running_threads {
+            for (thread_id, agent_path, routing) in running_threads {
                 let preview = if let Some(channel) = self.thread_event_channels.get(&thread_id) {
                     match channel.store.try_lock() {
                         Ok(store) => {
                             super::agent_status_feed::AgentStatusThreadPreview::from_store(
-                                agent_path, &store,
+                                agent_path, routing, &store,
                             )
                         }
-                        Err(_) => {
-                            super::agent_status_feed::AgentStatusThreadPreview::empty(agent_path)
-                        }
+                        Err(_) => super::agent_status_feed::AgentStatusThreadPreview::empty(
+                            agent_path, routing,
+                        ),
                     }
                 } else {
-                    super::agent_status_feed::AgentStatusThreadPreview::empty(agent_path)
+                    super::agent_status_feed::AgentStatusThreadPreview::empty(agent_path, routing)
                 };
                 entries.push(preview);
             }
@@ -196,16 +200,20 @@ impl App {
                         )
                     });
                 let uuid = thread_id.to_string();
+                let description = format!(
+                    "{} · {uuid}",
+                    crate::multi_agents::routing_label(entry.routing.as_ref())
+                );
                 SelectionItem {
                     name: name.clone(),
                     name_prefix_spans: agent_picker_status_dot_spans(entry.is_closed),
-                    description: Some(uuid.clone()),
+                    description: Some(description.clone()),
                     is_current: self.active_thread_id == Some(thread_id),
                     actions: vec![Box::new(move |tx| {
                         tx.send(AppEvent::SelectAgentThread(id));
                     })],
                     dismiss_on_select: true,
-                    search_value: Some(format!("{name} {uuid}")),
+                    search_value: Some(format!("{name} {description}")),
                     ..Default::default()
                 }
             })
@@ -319,6 +327,15 @@ impl App {
                     self.agent_navigation.mark_parent_owned(thread_id);
                 }
                 self.agent_navigation.set_agent_path(thread_id, agent_path);
+                self.agent_navigation.set_routing(
+                    thread_id,
+                    thread
+                        .model
+                        .map(|model| codex_app_server_protocol::SubAgentRouting {
+                            model,
+                            reasoning_effort: thread.reasoning_effort,
+                        }),
+                );
                 if is_running {
                     self.agent_navigation.mark_running(thread_id);
                 } else {
@@ -400,6 +417,13 @@ impl App {
                 if started.blocks_direct_input {
                     self.agent_navigation.mark_parent_owned(thread_id);
                 }
+                self.agent_navigation.set_routing(
+                    thread_id,
+                    Some(codex_app_server_protocol::SubAgentRouting {
+                        model: started.session.model.clone(),
+                        reasoning_effort: started.session.reasoning_effort.clone(),
+                    }),
+                );
                 (started.session, started.turns, true)
             }
             Err(resume_err) => {
@@ -1122,6 +1146,8 @@ impl App {
             );
             self.agent_navigation
                 .set_agent_path(thread.thread_id, agent_path);
+            self.agent_navigation
+                .set_routing(thread.thread_id, thread.routing);
             // A live channel can have an empty store after a successful spawn. Only apply server
             // status for channels that would otherwise need another liveness read.
             if !has_live_channel {

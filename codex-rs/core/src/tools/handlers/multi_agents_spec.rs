@@ -210,8 +210,8 @@ pub fn create_send_message_tool() -> ToolSpec {
     })
 }
 
-pub fn create_followup_task_tool() -> ToolSpec {
-    let properties = BTreeMap::from([
+pub fn create_followup_task_tool(options: &SpawnAgentToolOptions) -> ToolSpec {
+    let mut properties = BTreeMap::from([
         (
             "target".to_string(),
             JsonSchema::string(Some(
@@ -227,15 +227,68 @@ pub fn create_followup_task_tool() -> ToolSpec {
             .with_encrypted(),
         ),
     ]);
+    let mut description = FOLLOWUP_TASK_DESCRIPTION.to_string();
+    if options.expose_spawn_agent_model_overrides {
+        properties.insert(
+            "model".to_string(),
+            JsonSchema::string(Some(
+                "Model for the target agent's next turn. Omit to keep its current model."
+                    .to_string(),
+            )),
+        );
+        properties.insert(
+            "reasoning_effort".to_string(),
+            JsonSchema::string(Some(
+                "Reasoning effort for the target agent's next turn. Omit to keep its current effort, or the new model's default when `model` changes."
+                    .to_string(),
+            )),
+        );
+        description.push_str(FOLLOWUP_TASK_ROUTING_GUIDANCE);
+        let models =
+            spawn_agent_models_description(&options.available_models, options.multi_agent_version);
+        if !models.is_empty() {
+            description.push(' ');
+            description.push_str(&models);
+        }
+    }
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
-            .to_string(),
+        description,
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(vec!["target".to_string(), "message".to_string()]), Some(false.into())),
-        output_schema: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["target".to_string(), "message".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: Some(followup_task_output_schema()),
+    })
+}
+
+const FOLLOWUP_TASK_DESCRIPTION: &str = "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes.";
+
+const FOLLOWUP_TASK_ROUTING_GUIDANCE: &str = " For a direct child, set `model` or `reasoning_effort` to change its next turn while keeping its history. Changed routing interrupts and settles the current turn before starting the follow-up. Background terminals remain running. Returns the effective model and effort.";
+
+fn followup_task_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "model": {
+                "type": "string",
+                "description": "Model the target agent runs on for the follow-up."
+            },
+            "reasoning_effort": {
+                "type": ["string", "null"],
+                "description": "Reasoning effort the target agent runs with for the follow-up."
+            },
+            "interrupted": {
+                "type": "boolean",
+                "description": "Whether a running turn was interrupted to apply changed routing."
+            }
+        },
+        "required": ["model", "reasoning_effort", "interrupted"],
+        "additionalProperties": false
     })
 }
 
@@ -342,13 +395,21 @@ pub fn create_interrupt_agent_tool_v2() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "interrupt_agent".to_string(),
-        description: "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.".to_string(),
+        description: "Interrupt a direct child's current turn and wait for teardown acknowledgement. `settled` refers to that turn, not to background terminals, which remain running and are counted separately. The child retains its history and can receive follow-ups; interruption does not complete its task.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-        output_schema: Some(agent_previous_status_output_schema(
-            "The agent status observed before the interrupt request was handled.",
-        )),
+        output_schema: Some(json!({
+            "type": "object",
+            "properties": {
+                "previous_status": agent_status_output_schema(),
+                "status": agent_status_output_schema(),
+                "settled": { "type": "boolean", "description": "The interrupted turn's teardown was acknowledged before the wait expired." },
+                "background_terminals": { "type": "integer", "minimum": 0, "description": "Terminals still owned by the child; interruption does not terminate them." }
+            },
+            "required": ["previous_status", "status", "settled", "background_terminals"],
+            "additionalProperties": false
+        })),
     })
 }
 
@@ -426,9 +487,17 @@ fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
             "nickname": {
                 "type": ["string", "null"],
                 "description": "User-facing nickname for the spawned agent when available."
+            },
+            "model": {
+                "type": ["string", "null"],
+                "description": "Model the spawned agent runs on after role and default resolution."
+            },
+            "reasoning_effort": {
+                "type": ["string", "null"],
+                "description": "Reasoning effort the spawned agent runs with."
             }
         },
-        "required": ["task_name", "nickname"],
+        "required": ["task_name", "nickname", "model", "reasoning_effort"],
         "additionalProperties": false
     })
 }

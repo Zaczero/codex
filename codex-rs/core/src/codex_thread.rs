@@ -607,7 +607,9 @@ impl CodexThread {
         self.session.terminate_background_terminal(process_id).await
     }
 
-    pub(crate) fn subscribe_status(&self) -> watch::Receiver<AgentStatus> {
+    pub(crate) fn subscribe_status(
+        &self,
+    ) -> watch::Receiver<crate::agent::status::AgentStatusSnapshot> {
         self.io.agent_status.clone()
     }
 

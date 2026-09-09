@@ -46,7 +46,7 @@ pub(crate) struct Session {
     pub(crate) thread_id: ThreadId,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
-    pub(super) agent_status: watch::Sender<AgentStatus>,
+    pub(super) agent_status: watch::Sender<crate::agent::status::AgentStatusSnapshot>,
     pub(super) state: Mutex<SessionState>,
     /// Orders accepted settings commits and their persisted events with compaction checkpoints.
     /// Keep this separate from `state` so storage I/O does not block runtime state access.
@@ -665,7 +665,7 @@ impl Session {
         model_info: ModelInfo,
         exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
-        agent_status: watch::Sender<AgentStatus>,
+        agent_status: watch::Sender<crate::agent::status::AgentStatusSnapshot>,
         mut initial_history: InitialHistory,
         fork_persistence: ForkPersistence,
         session_source: SessionSource,

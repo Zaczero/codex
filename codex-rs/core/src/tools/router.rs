@@ -2,7 +2,6 @@ use crate::function_tool::FunctionCallError;
 use crate::responses_metadata::TurnToolNamespacesInfo;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
-#[cfg(test)]
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
@@ -42,8 +41,13 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
-    pub(crate) fn direct_source(&self) -> ToolCallSource {
-        if self.tool_name.namespace.as_deref() == Some("collaboration")
+    pub(crate) fn direct_source(&self, turn: &TurnContext) -> ToolCallSource {
+        let is_agent_namespace = match turn.multi_agent_v2_tool_namespace() {
+            Some(namespace) => self.tool_name.namespace.as_deref() == Some(namespace),
+            None => self.tool_name.is_default_namespace(),
+        };
+        if turn.multi_agent_version == codex_protocol::protocol::MultiAgentVersion::V2
+            && is_agent_namespace
             && matches!(
                 self.tool_name.name.as_str(),
                 "spawn_agent" | "send_message" | "followup_task"

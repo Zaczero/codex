@@ -24,6 +24,7 @@ use crate::multi_agents::SubAgentActivityDisplay;
 use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut;
 use crate::multi_agents::previous_agent_shortcut;
+use codex_app_server_protocol::SubAgentRouting;
 use codex_protocol::ThreadId;
 use ratatui::text::Span;
 use std::collections::HashMap;
@@ -122,42 +123,26 @@ impl AgentNavigationState {
         if !self.threads.contains_key(&thread_id) {
             self.order.push(thread_id);
         }
-        let (previous_agent_path, previous_is_running) = self
-            .threads
-            .get(&thread_id)
-            .map(|entry| (entry.agent_path.clone(), entry.is_running))
-            .unwrap_or((None, false));
-        self.threads.insert(
-            thread_id,
-            AgentPickerThreadEntry {
-                agent_nickname,
-                agent_role,
-                agent_path: previous_agent_path,
-                is_running: previous_is_running && !is_closed,
-                is_closed,
-            },
-        );
+        let entry = self.threads.entry(thread_id).or_default();
+        entry.agent_nickname = agent_nickname;
+        entry.agent_role = agent_role;
+        entry.is_running &= !is_closed;
+        entry.is_closed = is_closed;
     }
 
     pub(crate) fn record_sub_agent_activity(&mut self, activity: SubAgentActivityDisplay) {
         if !self.threads.contains_key(&activity.thread_id) {
             self.order.push(activity.thread_id);
         }
-        let entry =
-            self.threads
-                .entry(activity.thread_id)
-                .or_insert_with(|| AgentPickerThreadEntry {
-                    agent_nickname: None,
-                    agent_role: None,
-                    agent_path: None,
-                    is_running: false,
-                    is_closed: false,
-                });
+        let entry = self.threads.entry(activity.thread_id).or_default();
         entry.agent_path = Some(activity.agent_path);
-        if activity.is_running_hint
-            && !entry.is_closed
-            && !self.stopped_threads.contains(&activity.thread_id)
-        {
+        if activity.routing.is_some() {
+            entry.routing = activity.routing;
+        }
+        let Some(is_running) = activity.is_running_hint else {
+            return;
+        };
+        if is_running && !entry.is_closed && !self.stopped_threads.contains(&activity.thread_id) {
             entry.is_running = true;
         } else {
             entry.is_running = false;
@@ -193,6 +178,14 @@ impl AgentNavigationState {
             && let Some(entry) = self.threads.get_mut(&thread_id)
         {
             entry.agent_path = Some(agent_path);
+        }
+    }
+
+    pub(crate) fn set_routing(&mut self, thread_id: ThreadId, routing: Option<SubAgentRouting>) {
+        if let Some(routing) = routing
+            && let Some(entry) = self.threads.get_mut(&thread_id)
+        {
+            entry.routing = Some(routing);
         }
     }
 

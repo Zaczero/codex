@@ -7,7 +7,7 @@ use crate::history_cell::plain_lines;
 use crate::text_formatting::truncate_text;
 use codex_app_server_protocol::CollabAgentTool;
 use codex_app_server_protocol::ServerNotification;
-use codex_app_server_protocol::SubAgentActivityKind;
+use codex_app_server_protocol::SubAgentRouting;
 use codex_app_server_protocol::ThreadItem;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -65,20 +65,26 @@ impl HistoryCell for AgentStatusHistoryCell {
 #[derive(Debug)]
 pub(super) struct AgentStatusThreadPreview {
     agent_path: String,
+    routing: Option<SubAgentRouting>,
     activity: Vec<String>,
 }
 
 impl AgentStatusThreadPreview {
-    pub(super) fn from_store(agent_path: String, store: &ThreadEventStore) -> Self {
-        Self::from_events(agent_path, store.buffer.iter().rev())
+    pub(super) fn from_store(
+        agent_path: String,
+        routing: Option<SubAgentRouting>,
+        store: &ThreadEventStore,
+    ) -> Self {
+        Self::from_events(agent_path, routing, store.buffer.iter().rev())
     }
 
-    pub(super) fn empty(agent_path: String) -> Self {
-        Self::from_events(agent_path, std::iter::empty())
+    pub(super) fn empty(agent_path: String, routing: Option<SubAgentRouting>) -> Self {
+        Self::from_events(agent_path, routing, std::iter::empty())
     }
 
     fn from_events<'a>(
         agent_path: String,
+        routing: Option<SubAgentRouting>,
         events: impl Iterator<Item = &'a ThreadBufferedEvent>,
     ) -> Self {
         let mut seen_item_ids = HashSet::new();
@@ -107,12 +113,19 @@ impl AgentStatusThreadPreview {
         activity.reverse();
         Self {
             agent_path,
+            routing,
             activity,
         }
     }
 
     fn title_line(&self) -> Line<'static> {
-        vec!["  • ".dim(), format!("`{}`", self.agent_path).cyan()].into()
+        vec![
+            "  • ".dim(),
+            format!("`{}`", self.agent_path).cyan(),
+            " · ".dim(),
+            crate::multi_agents::routing_label(self.routing.as_ref()).dim(),
+        ]
+        .into()
     }
 
     fn preview_lines(&self, width: u16) -> Vec<Line<'static>> {
@@ -171,15 +184,16 @@ fn activity_summary(item: &ThreadItem) -> Option<String> {
             return Some(action.to_string());
         }
         ThreadItem::SubAgentActivity {
-            kind, agent_path, ..
+            kind,
+            agent_path,
+            routing,
+            ..
         } => {
-            let action = match kind {
-                SubAgentActivityKind::Started => "Started",
-                SubAgentActivityKind::Interacted => "Contacted",
-                SubAgentActivityKind::Interrupted => "Interrupted",
-                SubAgentActivityKind::Completed => "Completed",
-            };
-            return bounded_summary(&format!("{action} {agent_path}"));
+            return bounded_summary(&crate::multi_agents::sub_agent_activity_summary(
+                *kind,
+                agent_path,
+                routing.as_ref(),
+            ));
         }
         ThreadItem::WebSearch(item) => {
             return bounded_summary(&format!("Web search: {}", item.query));

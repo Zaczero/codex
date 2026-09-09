@@ -5,6 +5,8 @@ mod daybreak_tests;
 
 #[path = "tests/advanced_reasoning_tests.rs"]
 mod advanced_reasoning_tests;
+#[path = "tests/agent_routing_tests.rs"]
+mod agent_routing_tests;
 #[path = "tests/agents_navigation_tests.rs"]
 mod agents_navigation_tests;
 #[path = "tests/backend_banner_fallback_tests.rs"]
@@ -1926,6 +1928,7 @@ async fn collab_receiver_notification_caches_thread_without_app_server_read() {
     assert_eq!(
         app.agent_navigation.get(&receiver_thread_id),
         Some(&AgentPickerThreadEntry {
+            routing: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -1958,6 +1961,7 @@ async fn collab_receiver_notification_does_not_cache_not_found_thread() {
                 agents_states: HashMap::from([(
                     receiver_thread_id.to_string(),
                     codex_app_server_protocol::CollabAgentState {
+                        routing: None,
                         status: codex_app_server_protocol::CollabAgentStatus::NotFound,
                         message: None,
                     },
@@ -2024,6 +2028,7 @@ async fn open_agent_picker_keeps_missing_threads_for_replay() -> Result<()> {
     assert_eq!(
         app.agent_navigation.get(&thread_id),
         Some(&AgentPickerThreadEntry {
+            routing: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -2059,6 +2064,7 @@ async fn open_agent_picker_preserves_cached_metadata_for_replay_threads() -> Res
     assert_eq!(
         app.agent_navigation.get(&thread_id),
         Some(&AgentPickerThreadEntry {
+            routing: None,
             agent_nickname: Some("Robie".to_string()),
             agent_role: Some("explorer".to_string()),
             agent_path: None,
@@ -2082,14 +2088,16 @@ async fn open_agent_picker_preserves_running_hints_until_observed_completion() -
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 4));
     app.agent_navigation
         .record_sub_agent_activity(SubAgentActivityDisplay {
+            routing: None,
             thread_id,
             agent_path: "/root/child".to_string(),
-            is_running_hint: true,
+            is_running_hint: Some(true),
         });
 
     Box::pin(app.open_agent_picker(&mut app_server)).await;
 
     let mut expected_entry = AgentPickerThreadEntry {
+        routing: None,
         agent_nickname: None,
         agent_role: None,
         agent_path: Some("/root/child".to_string()),
@@ -2106,13 +2114,13 @@ async fn open_agent_picker_preserves_running_hints_until_observed_completion() -
             }
         }
     };
-    assert_snapshot!(status, @r###"
+    assert_snapshot!(status, @"
     /subagents
     Sub-agents running
 
-      • `/root/child`
+      • `/root/child` · model/effort unavailable
         No recent activity yet.
-    "###);
+    ");
 
     app.enqueue_thread_notification(
         thread_id,
@@ -2137,9 +2145,10 @@ async fn open_agent_picker_preserves_running_hints_until_observed_completion() -
     assert_eq!(app.agent_navigation.get(&thread_id), Some(&expected_entry));
     app.agent_navigation
         .record_sub_agent_activity(SubAgentActivityDisplay {
+            routing: None,
             thread_id,
             agent_path: "/root/child".to_string(),
-            is_running_hint: true,
+            is_running_hint: Some(true),
         });
 
     Box::pin(app.open_agent_picker(&mut app_server)).await;
@@ -2175,9 +2184,10 @@ async fn open_agent_picker_clears_running_hint_from_completed_snapshot() -> Resu
     );
     app.agent_navigation
         .record_sub_agent_activity(SubAgentActivityDisplay {
+            routing: None,
             thread_id,
             agent_path: "/root/child".to_string(),
-            is_running_hint: true,
+            is_running_hint: Some(true),
         });
     assert!(!app.agent_navigation.is_parent_owned(thread_id));
 
@@ -2186,6 +2196,7 @@ async fn open_agent_picker_clears_running_hint_from_completed_snapshot() -> Resu
     assert_eq!(
         app.agent_navigation.get(&thread_id),
         Some(&AgentPickerThreadEntry {
+            routing: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: Some("/root/child".to_string()),
@@ -2210,9 +2221,10 @@ async fn open_agent_picker_selects_path_backed_agent() -> Result<()> {
         .insert(thread_id, ThreadEventChannel::new(/*capacity*/ 1));
     app.agent_navigation
         .record_sub_agent_activity(SubAgentActivityDisplay {
+            routing: None,
             thread_id,
             agent_path: "/root/worker".to_string(),
-            is_running_hint: true,
+            is_running_hint: Some(true),
         });
 
     Box::pin(app.open_agent_picker(&mut app_server)).await;
@@ -2249,9 +2261,10 @@ async fn open_agent_picker_refreshes_replay_only_path_backed_liveness() -> Resul
     app.thread_event_channels.insert(thread_id, channel);
     app.agent_navigation
         .record_sub_agent_activity(SubAgentActivityDisplay {
+            routing: None,
             thread_id,
             agent_path: "/root/child".to_string(),
-            is_running_hint: true,
+            is_running_hint: Some(true),
         });
 
     Box::pin(app.open_agent_picker(&mut app_server)).await;
@@ -2259,6 +2272,7 @@ async fn open_agent_picker_refreshes_replay_only_path_backed_liveness() -> Resul
     assert_eq!(
         app.agent_navigation.get(&thread_id),
         Some(&AgentPickerThreadEntry {
+            routing: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: Some("/root/child".to_string()),
@@ -2315,6 +2329,7 @@ async fn open_agent_picker_marks_terminal_read_errors_closed() -> Result<()> {
     assert_eq!(
         app.agent_navigation.get(&thread_id),
         Some(&AgentPickerThreadEntry {
+            routing: None,
             agent_nickname: Some("Robie".to_string()),
             agent_role: Some("explorer".to_string()),
             agent_path: None,
@@ -2355,6 +2370,10 @@ fn open_agent_picker_marks_loaded_threads_open() -> Result<()> {
         assert_eq!(
             app.agent_navigation.get(&thread_id),
             Some(&AgentPickerThreadEntry {
+                routing: Some(codex_app_server_protocol::SubAgentRouting {
+                    model: started.session.model.clone(),
+                    reasoning_effort: started.session.reasoning_effort.clone(),
+                }),
                 agent_nickname: None,
                 agent_role: None,
                 agent_path: None,
@@ -2481,9 +2500,10 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
 
         app.agent_navigation
             .record_sub_agent_activity(SubAgentActivityDisplay {
+                routing: None,
                 thread_id: child_thread_ids[0],
                 agent_path: "/root/child-0".to_string(),
-                is_running_hint: true,
+                is_running_hint: Some(true),
             });
         app.thread_event_channels.remove(&child_thread_ids[1]);
         let backfill = app.backfill_loaded_subagent_threads(&mut app_server).await;
@@ -2492,9 +2512,18 @@ fn selected_and_resumed_threads_use_server_capability_for_v1_and_v2_children() -
             backfill.refreshed_thread_ids,
             [child_thread_ids[1]].into_iter().collect()
         );
+        let child_thread = app_server
+            .thread_read(child_thread_ids[0], /*include_turns*/ false)
+            .await?;
         assert_eq!(
             app.agent_navigation.get(&child_thread_ids[0]),
             Some(&AgentPickerThreadEntry {
+                routing: child_thread.model.map(|model| {
+                    codex_app_server_protocol::SubAgentRouting {
+                        model,
+                        reasoning_effort: child_thread.reasoning_effort,
+                    }
+                }),
                 agent_nickname: Some("child-0".to_string()),
                 agent_role: Some("worker".to_string()),
                 agent_path: Some("/root/child-0".to_string()),
@@ -4455,6 +4484,10 @@ async fn inactive_thread_started_notification_initializes_replay_session() -> Re
     assert_eq!(
         app.agent_navigation.get(&agent_thread_id),
         Some(&AgentPickerThreadEntry {
+            routing: Some(codex_app_server_protocol::SubAgentRouting {
+                model: session.model.clone(),
+                reasoning_effort: session.reasoning_effort.clone(),
+            }),
             agent_nickname: Some("Robie".to_string()),
             agent_role: Some("explorer".to_string()),
             agent_path: None,

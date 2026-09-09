@@ -220,6 +220,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::exec_output::StreamOutput;
 
 mod account_history;
+mod agent_routing;
 mod code_mode_warning;
 pub(crate) mod context_window;
 mod environment;
@@ -398,7 +399,7 @@ pub(crate) struct SessionIo {
     pub(crate) tx_sub: Sender<Submission>,
     pub(crate) rx_event: Receiver<Event>,
     // Last known status of the agent.
-    pub(crate) agent_status: watch::Receiver<AgentStatus>,
+    pub(crate) agent_status: watch::Receiver<crate::agent::status::AgentStatusSnapshot>,
     // Shared future for the background submission loop completion so multiple
     // callers can wait for shutdown.
     pub(crate) session_loop_termination: SessionLoopTermination,
@@ -791,7 +792,7 @@ impl Session {
 
         // Generate a unique ID for the lifetime of this session.
         let session_source_clone = session_configuration.session_source.clone();
-        let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+        let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit.into());
 
         let session = Box::pin(Session::new(
             session_configuration,
@@ -973,7 +974,7 @@ impl SessionIo {
     }
 
     pub(crate) async fn agent_status(&self) -> AgentStatus {
-        self.agent_status.borrow().clone()
+        self.agent_status.borrow().status.clone()
     }
 }
 
@@ -1265,11 +1266,12 @@ impl Session {
     }
 
     pub(crate) fn mark_interrupted(&self) {
-        self.agent_status.send_replace(AgentStatus::Interrupted);
+        self.agent_status
+            .send_modify(|state| state.status = AgentStatus::Interrupted);
     }
 
     pub(crate) fn is_interrupted(&self) -> bool {
-        matches!(*self.agent_status.borrow(), AgentStatus::Interrupted)
+        matches!(self.agent_status.borrow().status, AgentStatus::Interrupted)
     }
 
     pub(crate) fn get_tx_event(&self) -> Sender<Event> {
@@ -1468,7 +1470,8 @@ impl Session {
                     }),
                     Some(AgentStatus::Interrupted)
                 ) {
-                    self.agent_status.send_replace(AgentStatus::Interrupted);
+                    self.agent_status
+                        .send_modify(|state| state.status = AgentStatus::Interrupted);
                 }
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
@@ -2175,7 +2178,8 @@ impl Session {
                 .analytics_events_client
                 .track_guardian_session_event(self.thread_id, &event);
         }
-        self.send_event_raw(event).await;
+        self.send_event_raw_with_persistence(event, /*persist*/ true, Some(turn_context))
+            .await;
         self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
             .await;
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
@@ -2222,7 +2226,8 @@ impl Session {
         let status = match turn_context.terminal_error.lock().await.take() {
             Some(error) => {
                 let status = AgentStatus::Errored(error.message);
-                self.agent_status.send_replace(status.clone());
+                self.agent_status
+                    .send_modify(|state| state.status = status.clone());
                 status
             }
             None => {
@@ -2297,6 +2302,7 @@ impl Session {
                             kind: SubAgentActivityKind::Completed,
                             agent_thread_id: self.thread_id,
                             agent_path: child_agent_path.clone(),
+                            routing: Some(turn_context.into()),
                         },
                     )
                     .await
@@ -2311,6 +2317,7 @@ impl Session {
             parent_agent_path.clone(),
             child_agent_path.clone(),
             &status,
+            Some(turn_context.into()),
         ) else {
             return;
         };
@@ -2414,8 +2421,10 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
-        self.send_event_raw_with_persistence(event, /*persist*/ true)
-            .await;
+        self.send_event_raw_with_persistence(
+            event, /*persist*/ true, /*turn_context*/ None,
+        )
+        .await;
     }
 
     /// Delivers an event without creating a local rollout for a thread that has not materialized.
@@ -2428,10 +2437,16 @@ impl Session {
                 true
             }
         };
-        self.send_event_raw_with_persistence(event, persist).await;
+        self.send_event_raw_with_persistence(event, persist, /*turn_context*/ None)
+            .await;
     }
 
-    async fn send_event_raw_with_persistence(&self, event: Event, persist: bool) {
+    async fn send_event_raw_with_persistence(
+        &self,
+        event: Event,
+        persist: bool,
+        turn_context: Option<&TurnContext>,
+    ) {
         // Keep realtime reduction, canonical append, and delivery in the same order.
         // This lock must not acquire SessionState or ActiveTurn: event producers can
         // already hold those locks. Host presentation policies are synchronous.
@@ -2471,13 +2486,28 @@ impl Session {
         {
             warn!("failed to persist realtime history: {error}");
         }
-        self.deliver_event_raw(event).await;
+        self.deliver_event_raw_with_routing(event, turn_context)
+            .await;
     }
 
     async fn deliver_event_raw(&self, event: Event) {
+        self.deliver_event_raw_with_routing(event, /*turn_context*/ None)
+            .await;
+    }
+
+    async fn deliver_event_raw_with_routing(
+        &self,
+        event: Event,
+        turn_context: Option<&TurnContext>,
+    ) {
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
-            self.agent_status.send_replace(status);
+            self.agent_status.send_modify(|state| {
+                state.status = status;
+                if let Some(turn) = turn_context {
+                    state.routing = Some(turn.into());
+                }
+            });
         }
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");

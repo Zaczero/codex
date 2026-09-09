@@ -202,6 +202,17 @@
             "null"
           ]
         },
+        "routing": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SubAgentRouting"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "status": {
           "$ref": "#/definitions/CollabAgentStatus"
         }
@@ -957,6 +968,29 @@
         "completed"
       ],
       "type": "string"
+    },
+    "SubAgentRouting": {
+      "description": "Resolved model selection recorded with sub-agent activity.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
     },
     "SubAgentSource": {
       "oneOf": [
@@ -1837,7 +1871,7 @@
               "type": "string"
             },
             "model": {
-              "description": "Model requested for the spawned agent, when applicable.",
+              "description": "Model captured for a single target agent, when available.",
               "type": [
                 "string",
                 "null"
@@ -1859,7 +1893,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Reasoning effort requested for the spawned agent, when applicable."
+              "description": "Reasoning effort captured for a single target agent, when available."
             },
             "receiverThreadIds": {
               "description": "Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
@@ -1921,6 +1955,18 @@
             },
             "kind": {
               "$ref": "#/definitions/SubAgentActivityKind"
+            },
+            "routing": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SubAgentRouting"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Routing captured for this activity; completion uses the finishing turn's routing."
             },
             "type": {
               "enum": [

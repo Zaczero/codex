@@ -1,5 +1,6 @@
 use super::analytics::ToolCallAnalytics;
 use super::message_tool::MessageDeliveryMode;
+use super::message_tool::RequestedRouting;
 use super::message_tool::SendMessageArgs;
 use super::message_tool::handle_message_string_tool;
 use super::*;
@@ -43,6 +44,7 @@ impl Handler {
             MessageDeliveryMode::QueueOnly,
             args.target,
             args.message,
+            RequestedRouting::default(),
             analytics,
         )
         .await

@@ -65,7 +65,7 @@ use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::spec_plan::append_source_tools;
 use crate::tools::spec_plan::build_core_tool_registry;
 
-const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const MULTI_AGENT_V2_NAMESPACE: &str = "codex_agents";
 
 #[derive(Default)]
 struct ToolPlanInputs {
@@ -851,6 +851,22 @@ async fn request_user_input_tool_respects_experimental_config_gate() {
     .await;
     disabled.assert_visible_lacks(&["request_user_input"]);
     disabled.assert_registered_lacks(&["request_user_input"]);
+}
+
+#[tokio::test]
+async fn request_user_input_tool_is_root_only() {
+    let child = probe(|turn| {
+        turn.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::new(),
+            depth: 1,
+            agent_path: Some(AgentPath::try_from("/root/worker").expect("valid agent path")),
+            agent_nickname: None,
+            agent_role: None,
+        });
+    })
+    .await;
+    child.assert_visible_lacks(&["request_user_input"]);
+    child.assert_registered_lacks(&["request_user_input"]);
 }
 
 #[tokio::test]
@@ -2861,7 +2877,7 @@ async fn multi_agent_v2_can_disable_wait_agent() {
         ]
     );
     plan.assert_visible_lacks(&["clock"]);
-    plan.assert_registered_lacks(&["collaboration.wait_agent", "clock.sleep"]);
+    plan.assert_registered_lacks(&["codex_agents.wait_agent", "clock.sleep"]);
     assert!(plan.can_manage_children);
 }
 

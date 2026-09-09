@@ -72,7 +72,7 @@ async fn fresh_context_subagent_inherits_disabled_view_image_and_mcp_tools() -> 
     let message = "client-managed viewer remains available";
     let mut spawn_call = responses::ev_function_call_with_namespace(
         SPAWN_CALL_ID,
-        "collaboration",
+        "codex_agents",
         "spawn_agent",
         &serde_json::to_string(&json!({
             "message": CHILD_PROMPT,

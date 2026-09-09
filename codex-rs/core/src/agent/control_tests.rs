@@ -631,7 +631,7 @@ async fn subscribe_status_updates_on_shutdown() {
         .subscribe_status(thread_id)
         .await
         .expect("subscribe_status should succeed");
-    assert_eq!(status_rx.borrow().clone(), AgentStatus::PendingInit);
+    assert_eq!(status_rx.borrow().status.clone(), AgentStatus::PendingInit);
 
     let _ = thread
         .submit(Op::Shutdown {})
@@ -639,7 +639,7 @@ async fn subscribe_status_updates_on_shutdown() {
         .expect("shutdown should submit");
 
     let _ = status_rx.changed().await;
-    assert_eq!(status_rx.borrow().clone(), AgentStatus::Shutdown);
+    assert_eq!(status_rx.borrow().status.clone(), AgentStatus::Shutdown);
 }
 
 #[tokio::test]
@@ -3426,6 +3426,7 @@ async fn multi_agent_v2_completion_queues_message_for_direct_parent() {
         worker_path.clone(),
         tester_path.clone(),
         &AgentStatus::Completed(Some("done".to_string())),
+        Some(tester_turn.as_ref().into()),
     )
     .expect("completed status should render");
     let expected = (
@@ -3732,14 +3733,14 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         .subscribe_status(child_thread_id)
         .await
         .expect("status subscription should succeed");
-    if matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
+    if matches!(status_rx.borrow().status.clone(), AgentStatus::PendingInit) {
         timeout(Duration::from_secs(5), async {
             loop {
                 status_rx
                     .changed()
                     .await
                     .expect("child status should advance past pending init");
-                if !matches!(status_rx.borrow().clone(), AgentStatus::PendingInit) {
+                if !matches!(status_rx.borrow().status.clone(), AgentStatus::PendingInit) {
                     break;
                 }
             }

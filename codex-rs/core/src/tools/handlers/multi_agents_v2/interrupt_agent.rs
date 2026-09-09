@@ -67,25 +67,39 @@ async fn handle_interrupt_agent(
     let receiver_agent_path = receiver_agent.agent_path.clone().ok_or_else(|| {
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;
-    let status = session.services.agent_control.get_status(agent_id).await;
-    let result = match session
+    crate::agent::agent_resolver::require_direct_child(&turn.session_source, &receiver_agent_path)?;
+    let previous = session
         .services
         .agent_control
-        .interrupt_agent(agent_id)
-        .await
+        .get_status_snapshot(agent_id)
+        .await;
+    let settled = match tokio::time::timeout(
+        std::time::Duration::from_millis(SETTLEMENT_TIMEOUT_MS),
+        session
+            .services
+            .agent_control
+            .interrupt_agent_and_wait(agent_id),
+    )
+    .await
     {
-        Ok(_) => Ok(()),
-        Err(err)
+        Ok(Ok(())) => true,
+        Ok(Err(err))
             if matches!(
                 err.details(),
                 CodexErrorDetails::ThreadNotFound(_) | CodexErrorDetails::InternalAgentDied
             ) =>
         {
-            Ok(())
+            false
         }
-        Err(err) => Err(collab_agent_error(agent_id, err)),
+        Ok(Err(err)) => return Err(collab_agent_error(agent_id, err)),
+        Err(_) => false,
     };
-    result?;
+    let settled_status = session.services.agent_control.get_status(agent_id).await;
+    let background_terminals = session
+        .services
+        .agent_control
+        .count_agent_background_terminals(agent_id)
+        .await;
     emit_sub_agent_activity(
         &session,
         &turn,
@@ -94,14 +108,22 @@ async fn handle_interrupt_agent(
             agent_thread_id: agent_id,
             agent_path: receiver_agent_path,
             kind: SubAgentActivityKind::Interrupted,
+            routing: previous.routing.clone(),
         },
     )
     .await;
 
     Ok(InterruptAgentResult {
-        previous_status: status,
+        previous_status: previous.status,
+        routing: previous.routing,
+        settled,
+        status: settled_status,
+        background_terminals,
     })
 }
+
+/// Bounds the caller's wait. The child still owns teardown after this expires.
+const SETTLEMENT_TIMEOUT_MS: u64 = 15_000;
 
 impl CoreToolRuntime for Handler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -118,6 +140,13 @@ struct InterruptAgentArgs {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct InterruptAgentResult {
     pub(crate) previous_status: AgentStatus,
+    pub(crate) routing: Option<codex_protocol::items::SubAgentRouting>,
+    /// Latest status; queued work may have started after the interrupted turn settled.
+    pub(crate) status: AgentStatus,
+    /// Whether the interrupted turn's teardown was acknowledged before the wait expired.
+    pub(crate) settled: bool,
+    /// Background terminals the agent still owns; interrupting a turn does not stop them.
+    pub(crate) background_terminals: usize,
 }
 
 impl ToolOutput for InterruptAgentResult {

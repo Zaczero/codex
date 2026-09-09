@@ -12,6 +12,7 @@ fn error_completion_message_stays_below_manual_review_threshold() {
         AgentPath::root(),
         AgentPath::try_from("/root/worker").expect("valid agent path"),
         &AgentStatus::Errored("stream disconnected ".repeat(1_000)),
+        /*routing*/ None,
     )
     .expect("error status should produce a completion message");
 
