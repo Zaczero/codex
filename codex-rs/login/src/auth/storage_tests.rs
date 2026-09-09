@@ -14,6 +14,39 @@ use tempfile::tempdir;
 use codex_keyring_store::tests::MockKeyringStore;
 use keyring::Error as KeyringError;
 
+#[test]
+fn token_refresh_preserves_concurrent_agent_identity_enrollment() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    let storage = create_auth_storage(
+        home.path().to_path_buf(),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    );
+    let initial: AuthDotJson = serde_json::from_value(json!({
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": null,
+        "tokens": {
+            "id_token": "e30.e30.signature",
+            "access_token": "original-access",
+            "refresh_token": "original-refresh"
+        }
+    }))?;
+    storage.save(&initial)?;
+    let mut enrolled = initial.clone();
+    enrolled.agent_identity = Some(AgentIdentityStorage::Jwt("enrolled-identity".to_string()));
+    storage.replace_if_unchanged(&initial, &enrolled)?;
+
+    let mut refreshed = initial.clone();
+    let tokens = refreshed.tokens.as_mut().context("initial tokens")?;
+    tokens.access_token = "refreshed-access".to_string();
+    tokens.refresh_token = "refreshed-refresh".to_string();
+    let committed = storage.refresh_tokens(&initial, &refreshed)?;
+    refreshed.agent_identity = enrolled.agent_identity;
+    assert_eq!(committed, refreshed);
+    assert_eq!(storage.load()?, Some(refreshed));
+    Ok(())
+}
+
 #[tokio::test]
 async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
     let codex_home = tempdir()?;

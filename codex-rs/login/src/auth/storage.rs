@@ -170,6 +170,99 @@ pub(super) trait AuthStorageBackend: Debug + Send + Sync {
     fn delete(&self) -> std::io::Result<bool>;
 }
 
+#[derive(Debug)]
+pub(super) struct AuthStorage {
+    backend: Arc<dyn AuthStorageBackend>,
+    lock: StorageLock,
+}
+
+#[derive(Debug)]
+enum StorageLock {
+    Persistent(PathBuf),
+    Ephemeral,
+}
+
+static EPHEMERAL_AUTH_TRANSACTION: Mutex<()> = Mutex::new(());
+
+impl AuthStorage {
+    fn transaction<T>(
+        &self,
+        action: impl FnOnce(&dyn AuthStorageBackend) -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        match &self.lock {
+            StorageLock::Persistent(codex_home) => {
+                std::fs::create_dir_all(codex_home)?;
+                let mut options = OpenOptions::new();
+                options.read(true).write(true).create(true).truncate(false);
+                #[cfg(unix)]
+                options.mode(0o600);
+                // Keep the lock inode separate from the replaceable credential file.
+                let lock = options.open(codex_home.join("auth.lock"))?;
+                lock.lock()?;
+                action(self.backend.as_ref())
+            }
+            StorageLock::Ephemeral => {
+                let _guard = EPHEMERAL_AUTH_TRANSACTION.lock().map_err(|_| {
+                    std::io::Error::other("failed to lock ephemeral auth transaction")
+                })?;
+                action(self.backend.as_ref())
+            }
+        }
+    }
+
+    pub(super) fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+        self.transaction(|backend| backend.load())
+    }
+
+    pub(super) fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+        self.transaction(|backend| backend.save(auth))
+    }
+
+    pub(super) fn delete(&self) -> std::io::Result<bool> {
+        self.transaction(|backend| backend.delete())
+    }
+
+    pub(super) fn replace_if_unchanged(
+        &self,
+        expected: &AuthDotJson,
+        updated: &AuthDotJson,
+    ) -> std::io::Result<()> {
+        self.transaction(|backend| {
+            if backend.load()?.as_ref() != Some(expected) {
+                return Err(std::io::Error::other(
+                    "Authentication changed while credentials were being updated; retry with the current account.",
+                ));
+            }
+            backend.save(updated)
+        })
+    }
+
+    pub(super) fn refresh_tokens(
+        &self,
+        expected: &AuthDotJson,
+        updated: &AuthDotJson,
+    ) -> std::io::Result<AuthDotJson> {
+        self.transaction(|backend| {
+            let mut current = backend.load()?.ok_or_else(|| {
+                std::io::Error::other("Authentication was removed during token refresh.")
+            })?;
+            // Agent identity enrollment may complete while OAuth refresh is in flight.
+            // Preserve that independent update without accepting different credentials.
+            let agent_identity = current.agent_identity.take();
+            current.agent_identity.clone_from(&expected.agent_identity);
+            if &current != expected {
+                return Err(std::io::Error::other(
+                    "Authentication changed during token refresh; retry with the current account.",
+                ));
+            }
+            let mut refreshed = updated.clone();
+            refreshed.agent_identity = agent_identity;
+            backend.save(&refreshed)?;
+            Ok(refreshed)
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct FileAuthStorage {
     codex_home: PathBuf,
@@ -210,16 +303,28 @@ impl AuthStorageBackend for FileAuthStorage {
             std::fs::create_dir_all(parent)?;
         }
         let json_data = serde_json::to_string_pretty(auth_dot_json)?;
+        let temporary = self
+            .codex_home
+            .join(format!(".auth-{:016x}.tmp", rand::random::<u64>()));
         let mut options = OpenOptions::new();
-        options.truncate(true).write(true).create(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
             options.mode(0o600);
         }
-        let mut file = options.open(auth_file)?;
-        file.write_all(json_data.as_bytes())?;
-        file.flush()?;
-        Ok(())
+        let mut file = options.open(&temporary)?;
+        let result = (|| {
+            file.write_all(json_data.as_bytes())?;
+            file.sync_all()?;
+            std::fs::rename(&temporary, auth_file)?;
+            #[cfg(unix)]
+            File::open(&self.codex_home)?.sync_all()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result
     }
 
     fn delete(&self) -> std::io::Result<bool> {
@@ -503,7 +608,7 @@ pub(super) fn create_auth_storage(
     codex_home: PathBuf,
     mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
-) -> Arc<dyn AuthStorageBackend> {
+) -> Arc<AuthStorage> {
     let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
     create_auth_storage_with_store(codex_home, mode, keyring_store, keyring_backend_kind)
 }
@@ -513,8 +618,12 @@ fn create_auth_storage_with_store(
     mode: AuthCredentialsStoreMode,
     keyring_store: Arc<dyn KeyringStore>,
     keyring_backend_kind: AuthKeyringBackendKind,
-) -> Arc<dyn AuthStorageBackend> {
-    match mode {
+) -> Arc<AuthStorage> {
+    let lock = match mode {
+        AuthCredentialsStoreMode::Ephemeral => StorageLock::Ephemeral,
+        _ => StorageLock::Persistent(codex_home.clone()),
+    };
+    let backend: Arc<dyn AuthStorageBackend> = match mode {
         AuthCredentialsStoreMode::File => Arc::new(FileAuthStorage::new(codex_home)),
         AuthCredentialsStoreMode::Keyring => {
             create_keyring_auth_storage(codex_home, keyring_store, keyring_backend_kind)
@@ -525,7 +634,8 @@ fn create_auth_storage_with_store(
             keyring_backend_kind,
         )),
         AuthCredentialsStoreMode::Ephemeral => Arc::new(EphemeralAuthStorage::new(codex_home)),
-    }
+    };
+    Arc::new(AuthStorage { backend, lock })
 }
 
 fn create_keyring_auth_storage(

@@ -552,10 +552,13 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
         "non-local thread persistence should not create sqlite artifacts: {sqlite_artifacts:?}"
     );
     let mut entries = codex_home_entries(codex_home)?;
-    // Host startup may leave sandbox migration markers, and Bazel test runs may
-    // initialize shell snapshot storage. Neither is thread persistence.
+    // Host startup may leave sandbox migration markers, Bazel test runs may
+    // initialize shell snapshot storage, and account storage serializes its
+    // credential mutations through a lock file. None of these is thread
+    // persistence.
     entries.remove(".sandbox_migration");
     entries.remove("shell_snapshots");
+    entries.remove("auth.lock");
     assert_eq!(
         entries,
         BTreeSet::from([

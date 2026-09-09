@@ -52,7 +52,7 @@ pub use crate::auth::storage::AgentIdentityAuthRecord;
 pub use crate::auth::storage::AgentIdentityStorage;
 pub use crate::auth::storage::AuthDotJson;
 pub use crate::auth::storage::AuthKeyringBackendKind;
-use crate::auth::storage::AuthStorageBackend;
+use crate::auth::storage::AuthStorage;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::create_client;
@@ -174,7 +174,7 @@ pub struct ApiKeyAuth {
 #[derive(Debug, Clone)]
 pub struct ChatgptAuth {
     state: ChatgptAuthState,
-    storage: Arc<dyn AuthStorageBackend>,
+    storage: Arc<AuthStorage>,
 }
 
 #[derive(Debug, Clone)]
@@ -889,7 +889,7 @@ impl ChatgptAuth {
         self.current_auth_json().and_then(|auth| auth.tokens)
     }
 
-    fn storage(&self) -> &Arc<dyn AuthStorageBackend> {
+    fn storage(&self) -> &Arc<AuthStorage> {
         &self.storage
     }
 
@@ -907,18 +907,18 @@ impl ChatgptAuth {
 
 fn persist_agent_identity_record(
     auth_dot_json: &Arc<Mutex<Option<AuthDotJson>>>,
-    storage: &Arc<dyn AuthStorageBackend>,
+    storage: &Arc<AuthStorage>,
     record: AgentIdentityAuthRecord,
 ) -> std::io::Result<()> {
     let mut guard = auth_dot_json
         .lock()
         .map_err(|_| std::io::Error::other("failed to lock auth state"))?;
-    let mut auth = storage
-        .load()?
-        .or_else(|| guard.clone())
+    let expected = guard
+        .as_ref()
         .ok_or_else(|| std::io::Error::other("auth data is not available"))?;
+    let mut auth = expected.clone();
     auth.agent_identity = Some(AgentIdentityStorage::Record(record));
-    storage.save(&auth)?;
+    storage.replace_if_unchanged(expected, &auth)?;
     *guard = Some(auth);
     Ok(())
 }
@@ -1570,14 +1570,13 @@ async fn load_auth(
 
 // Persist refreshed tokens into auth storage and update last_refresh.
 fn persist_tokens(
-    storage: &Arc<dyn AuthStorageBackend>,
+    storage: &Arc<AuthStorage>,
+    expected: &AuthDotJson,
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> std::io::Result<AuthDotJson> {
-    let mut auth_dot_json = storage
-        .load()?
-        .ok_or(std::io::Error::other("Token data is not available."))?;
+    let mut auth_dot_json = expected.clone();
 
     let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
     if let Some(id_token) = id_token {
@@ -1590,8 +1589,7 @@ fn persist_tokens(
         tokens.refresh_token = refresh_token;
     }
     auth_dot_json.last_refresh = Some(Utc::now());
-    storage.save(&auth_dot_json)?;
-    Ok(auth_dot_json)
+    storage.refresh_tokens(expected, &auth_dot_json)
 }
 
 // Requests refreshed ChatGPT OAuth tokens from the auth service using a refresh token.
@@ -3049,10 +3047,14 @@ impl AuthManager {
         auth: &ChatgptAuth,
         refresh_token: String,
     ) -> Result<(), RefreshTokenError> {
+        let expected = auth.current_auth_json().ok_or_else(|| {
+            RefreshTokenError::Transient(std::io::Error::other("Token data is not available."))
+        })?;
         let refresh_response = request_chatgpt_token_refresh(refresh_token, auth.client()).await?;
 
         persist_tokens(
             auth.storage(),
+            &expected,
             refresh_response.id_token,
             refresh_response.access_token,
             refresh_response.refresh_token,

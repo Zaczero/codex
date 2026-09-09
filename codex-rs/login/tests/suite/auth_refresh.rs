@@ -1505,6 +1505,82 @@ async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
     Ok(())
 }
 
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn refresh_does_not_overwrite_replaced_or_deleted_credentials() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let replacement: AuthDotJson = serde_json::from_value(json!({
+        "auth_mode": "apikey",
+        "OPENAI_API_KEY": "replacement-api-key"
+    }))?;
+    for expected in [Some(replacement), None] {
+        let server = MockServer::start().await;
+        let ctx = RefreshTokenTestContext::new(&server).await?;
+        let initial = AuthDotJson {
+            auth_mode: Some(AuthMode::Chatgpt),
+            openai_api_key: None,
+            tokens: Some(build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN)),
+            last_refresh: Some(Utc::now()),
+            agent_identity: None,
+            personal_access_token: None,
+            bedrock_api_key: None,
+            bedrock_access_keys: None,
+        };
+        ctx.write_auth(&initial).await?;
+        let codex_home = ctx.codex_home.path().to_path_buf();
+        let replacement = expected.clone();
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .respond_with(move |_: &wiremock::Request| {
+                match &replacement {
+                    Some(auth) => save_auth(
+                        &codex_home,
+                        auth,
+                        AuthCredentialsStoreMode::File,
+                        AuthKeyringBackendKind::default(),
+                    )
+                    .expect("replace credentials before returning the refresh response"),
+                    None => {
+                        codex_login::logout(
+                            &codex_home,
+                            AuthCredentialsStoreMode::File,
+                            AuthKeyringBackendKind::default(),
+                        )
+                        .expect("log out before returning the refresh response");
+                    }
+                }
+                ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": "late-access-token",
+                    "refresh_token": "late-refresh-token"
+                }))
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = ctx
+            .auth_manager
+            .refresh_token_from_authority()
+            .await
+            .expect_err("a stale refresh must not replace current credentials");
+        assert!(
+            matches!(error, RefreshTokenError::Transient(_)),
+            "{error:?}"
+        );
+        assert_eq!(
+            load_auth_dot_json(
+                ctx.codex_home.path(),
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )?,
+            expected
+        );
+        server.verify().await;
+    }
+    Ok(())
+}
+
 struct RefreshTokenTestContext {
     codex_home: TempDir,
     auth_manager: Arc<AuthManager>,
