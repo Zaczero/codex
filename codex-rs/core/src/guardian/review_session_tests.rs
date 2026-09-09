@@ -415,19 +415,20 @@ async fn encrypted_parent_compaction_requires_original_item_id(thread_context_en
         internal_chat_message_metadata_passthrough: None,
     };
 
-    let mut history = ContextManager::new();
-    history.replace_annotated(vec![ResponseItemEnvelope {
-        item: item.clone(),
+    let envelope = ResponseItemEnvelope {
+        item,
         metadata: Some(CodexHarnessMetadata {
             compaction_model_hash: Some("compatible".to_owned()),
             ..Default::default()
         }),
-    }]);
+    };
+    let mut history = ContextManager::new();
+    history.replace_annotated(vec![envelope.clone()]);
     assert_eq!(
         policy
             .parent_compaction(&history, Some("compatible"))
             .expect("valid checkpoint"),
-        Some(item)
+        Some(envelope)
     );
     // The latest unusable checkpoint must not fall back to the older valid one.
     let mut items = history.annotated_items().to_vec();

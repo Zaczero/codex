@@ -127,7 +127,7 @@ pub(super) async fn resolve_auth_method(
                 ));
             };
             Ok(BedrockAuthMethod::ManagedBearerToken {
-                token: auth.api_key.clone(),
+                token: auth.api_key().to_owned(),
                 region: auth.region.clone(),
             })
         }
@@ -377,10 +377,10 @@ mod tests {
                 auth_refresh: None,
             }));
         let managed_auth =
-            AuthManager::from_auth_for_testing(CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-                api_key: "managed-bedrock-api-key".to_string(),
-                region: "us-east-1".to_string(),
-            }));
+            AuthManager::from_auth_for_testing(CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+                "managed-bedrock-api-key".to_string(),
+                "us-east-1".to_string(),
+            )));
         let managed_access_keys = AuthManager::from_auth_for_testing(CodexAuth::BedrockAccessKeys(
             BedrockAccessKeysAuth {
                 access_key_id: "managed-access-key-id".to_string(),

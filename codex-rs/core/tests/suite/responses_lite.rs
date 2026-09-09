@@ -454,10 +454,10 @@ async fn responses_lite_does_not_expose_standalone_web_search_for_bedrock_provid
     )
     .await;
 
-    let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-        api_key: "dummy".to_string(),
-        region: "us-east-1".to_string(),
-    });
+    let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+        "dummy".to_string(),
+        "us-east-1".to_string(),
+    ));
     let extensions = responses_extensions(&auth);
     let mut builder = test_codex()
         .with_auth(auth)

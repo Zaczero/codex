@@ -327,7 +327,7 @@ impl GuardianV2Extension {
         let parent_response_id = input
             .turn_store
             .get::<codex_api::ResponseId>()
-            .map(|id| id.0.clone());
+            .map(|id| id.as_ref().clone());
         let thread_context: Result<_, String> = async {
             let parsed_thread_id =
                 ThreadId::from_string(&thread_id).map_err(|error| error.to_string())?;

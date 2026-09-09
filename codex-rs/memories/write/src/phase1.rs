@@ -298,7 +298,10 @@ mod job {
                 internal_chat_message_metadata_passthrough: None,
             }],
             MemoryVersion::V2 => crate::rollout_input::extraction_messages(&input_text),
-        };
+        }
+        .into_iter()
+        .map(Into::into)
+        .collect();
         prompt.base_instructions = BaseInstructions {
             text: match config.memories.version {
                 MemoryVersion::V1 => crate::stage_one::PROMPT,

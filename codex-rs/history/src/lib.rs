@@ -42,10 +42,15 @@ pub struct ResponseItemEnvelope {
     pub metadata: Option<CodexHarnessMetadata>,
 }
 
+mod account_scope;
+
 /// Metadata owned by the Codex harness and persisted with a response item.
 ///
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct CodexHarnessMetadata {
+    /// Request-bound producer identity. Missing provenance never authorizes opaque replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_scope: Option<codex_protocol::auth::AccountScope>,
     /// Whether a developer message was supplied by an app-server client.
     #[serde(default)]
     pub client_authored: bool,

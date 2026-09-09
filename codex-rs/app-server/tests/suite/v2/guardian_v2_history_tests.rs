@@ -316,7 +316,9 @@ async fn guardians_retain_evidence_after_compaction_and_discard_it_after_rollbac
     .collect();
     write_chatgpt_auth(
         codex_home.path(),
-        ChatGptAuthFixture::new("access-chatgpt").plan_type("pro"),
+        ChatGptAuthFixture::new("access-chatgpt")
+            .plan_type("pro")
+            .account_id("guardian-history-account"),
         AuthCredentialsStoreMode::File,
     )?;
     write_models_cache_with_models(codex_home.path(), models).await?;

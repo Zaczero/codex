@@ -394,12 +394,16 @@ fn user_instruction(text: &str) -> ResponseItem {
 struct TestConversationHistory(Vec<ResponseItem>);
 
 struct TestRetainedHistory {
+    account_scope: Option<codex_protocol::auth::AccountScope>,
     current: TestConversationHistory,
     retained: Vec<ResponseItem>,
     compaction_model_hash: Option<String>,
 }
 
 impl ConversationHistorySnapshot for TestRetainedHistory {
+    fn latest_compaction_account_scope(&self) -> Option<&codex_protocol::auth::AccountScope> {
+        self.account_scope.as_ref()
+    }
     fn latest_compaction_model_hash(&self) -> Option<&str> {
         self.compaction_model_hash.as_deref()
     }
@@ -2990,6 +2994,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
     ]))?;
     retained.extend(conversation_history.0.clone());
     let conversation_history = TestRetainedHistory {
+        account_scope: CodexAuth::from_api_key("test-api-key").account_scope(),
         retained,
         current: conversation_history,
         compaction_model_hash: parent_model.comp_hash.clone(),
@@ -3085,6 +3090,7 @@ async fn assert_parent_compaction_reuse(thread_context_enabled: bool) -> Result<
             mcp_tool: None,
             payload: &tool_payload,
             conversation_history: Arc::new(TestRetainedHistory {
+                account_scope: CodexAuth::from_api_key("test-api-key").account_scope(),
                 current: TestConversationHistory(vec![latest_compaction, oversized_compaction]),
                 retained: Vec::new(),
                 compaction_model_hash: thread_store

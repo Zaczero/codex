@@ -38,6 +38,9 @@ use codex_app_server_client::AppServerPath;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AccountListResponse;
+use codex_app_server_protocol::AccountSwitchParams;
+use codex_app_server_protocol::AccountSwitchResponse;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
@@ -721,6 +724,31 @@ impl AppServerSession {
             })
             .await
             .map_err(|err| bootstrap_request_error("account/read failed during TUI bootstrap", err))
+    }
+
+    pub(crate) async fn list_named_accounts(&mut self) -> Result<AccountListResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::AccountList {
+                request_id,
+                params: None,
+            })
+            .await
+            .wrap_err("account/list failed in TUI")
+    }
+
+    pub(crate) async fn switch_named_account(
+        &mut self,
+        account_id: String,
+    ) -> Result<AccountSwitchResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::AccountSwitch {
+                request_id,
+                params: AccountSwitchParams { account_id },
+            })
+            .await
+            .wrap_err("account/switch failed in TUI")
     }
 
     pub(crate) async fn external_agent_config_detect(

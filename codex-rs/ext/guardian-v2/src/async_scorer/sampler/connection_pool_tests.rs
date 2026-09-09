@@ -110,6 +110,11 @@ async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() 
         );
         config.free_guardian = free_guardian;
         config.service_tier = Some("priority".to_owned());
+        let account_scope = config
+            .provider
+            .auth()
+            .await
+            .and_then(|auth| auth.account_scope());
         let sampler = LunaSampler::new(config);
         let opener = sampler.connections.replenish().unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -119,7 +124,10 @@ async fn cold_pool_uses_http_during_open_timeout_then_recovers_after_cooldown() 
         })
         .await?;
         let mut request = sample_request("parent-turn");
-        request.parent_response_id = Some("resp-parent".to_owned());
+        request.parent_response_id = Some(codex_api::ResponseId {
+            value: "resp-parent".to_owned(),
+            account_scope,
+        });
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(5), sampler.sample(request)).await??,
             "low"

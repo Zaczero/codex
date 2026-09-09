@@ -21,7 +21,7 @@ pub(super) struct RemoteCompactV2Attempt {
     pub(super) trace_input_history: Option<Vec<ResponseItem>>,
     pub(super) prompt_input: Vec<ResponseItem>,
     pub(super) prompt_input_metadata: Vec<Option<CodexHarnessMetadata>>,
-    pub(super) compaction_output: ResponseItem,
+    pub(super) compaction_output: codex_history::ResponseItemEnvelope,
     pub(super) compaction_response_id: String,
     pub(super) token_usage: Option<TokenUsage>,
     /// Keeps a session created for standalone compaction alive through lifecycle completion.
@@ -67,13 +67,9 @@ pub(super) async fn run_remote_compact_v2_attempt(
     let trace_input_history = compaction_trace
         .is_enabled()
         .then(|| history.raw_items().cloned().collect());
-    let (mut input, prompt_input_metadata): (Vec<_>, Vec<_>) = history
-        .for_prompt_annotated(&turn_context.model_info().input_modalities)
-        .into_iter()
-        .map(|envelope| (envelope.item, envelope.metadata))
-        .unzip();
+    let mut input = history.for_prompt_annotated(&turn_context.model_info().input_modalities);
     let tool_router = &step_context.tool_router;
-    input.push(ResponseItem::CompactionTrigger {});
+    input.push(ResponseItem::CompactionTrigger {}.into());
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
@@ -93,7 +89,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
     let trace_attempt = compaction_trace.start_attempt(&serde_json::json!({
         "model": turn_context.model_info().slug.as_str(),
         "instructions": prompt.base_instructions.text.as_str(),
-        "input": &prompt.input,
+        "input": prompt.input.iter().map(|envelope| &envelope.item).collect::<Vec<_>>(),
         "parallel_tool_calls": prompt.parallel_tool_calls,
     }));
     let mut owned_client_session = None;
@@ -112,7 +108,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
     trace_attempt.record_result(
         compaction_output_result
             .as_ref()
-            .map(|output| std::slice::from_ref(&output.compaction_output)),
+            .map(|output| std::slice::from_ref(&output.compaction_output.item)),
     );
     let RemoteCompactionV2Output {
         compaction_output,
@@ -121,6 +117,10 @@ pub(super) async fn run_remote_compact_v2_attempt(
     } = compaction_output_result?;
     let mut prompt_input = prompt.input;
     prompt_input.pop();
+    let (prompt_input, prompt_input_metadata) = prompt_input
+        .into_iter()
+        .map(|envelope| (envelope.item, envelope.metadata))
+        .unzip();
     Ok(RemoteCompactV2Attempt {
         trace_input_history,
         prompt_input,

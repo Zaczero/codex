@@ -419,10 +419,10 @@ pub(crate) async fn run_turn(
                 .await;
 
             // Construct the input that we will send to the model.
-            let sampling_request_input: Vec<ResponseItem> = async {
+            let sampling_request_input: Vec<codex_history::ResponseItemEnvelope> = async {
                 sess.clone_history()
                     .await
-                    .for_prompt(&step_context.settings.model_info.input_modalities)
+                    .for_prompt_annotated(&step_context.settings.model_info.input_modalities)
             }
             .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
             .await;
@@ -1391,7 +1391,7 @@ pub(super) fn collect_explicit_app_ids_from_skill_items(
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) fn build_prompt(
-    input: Vec<ResponseItem>,
+    input: Vec<codex_history::ResponseItemEnvelope>,
     step_context: &StepContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
@@ -1426,7 +1426,7 @@ async fn run_sampling_request(
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
-    input: Vec<ResponseItem>,
+    input: Vec<codex_history::ResponseItemEnvelope>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
     let turn_context = Arc::clone(&step_context.turn);
@@ -1457,14 +1457,21 @@ async fn run_sampling_request(
         } else {
             sess.clone_history()
                 .await
-                .for_prompt(&step_context.settings.model_info.input_modalities)
+                .for_prompt_annotated(&step_context.settings.model_info.input_modalities)
         };
-        let mut prompt_input = prompt_input;
+        let (mut prompt_input, metadata): (Vec<_>, Vec<_>) = prompt_input
+            .into_iter()
+            .map(|envelope| (envelope.item, envelope.metadata))
+            .unzip();
         sess.services
             .executed_tool_calls
             .attach_to_prompt(&mut prompt_input, &mut executed_tool_calls_by_output);
         let prompt = build_prompt(
-            prompt_input,
+            prompt_input
+                .into_iter()
+                .zip(metadata)
+                .map(|(item, metadata)| codex_history::ResponseItemEnvelope { item, metadata })
+                .collect(),
             step_context.as_ref(),
             base_instructions.clone(),
         );
@@ -1482,7 +1489,14 @@ async fn run_sampling_request(
         .await
         {
             Ok(output) => {
-                return Ok((output, original_input.unwrap_or(prompt.input)));
+                return Ok((
+                    output,
+                    original_input
+                        .unwrap_or(prompt.input)
+                        .into_iter()
+                        .map(codex_history::ResponseItemEnvelope::into_item)
+                        .collect(),
+                ));
             }
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
@@ -2214,6 +2228,7 @@ async fn handle_assistant_item_done_in_plan_mode(
             sess,
             turn_context,
             item,
+            /*account_scope*/ None,
             finalized_facts.as_ref(),
         )
         .await;
@@ -2398,9 +2413,10 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created { response_id } => {
                 if let Some(response_id) = response_id {
-                    turn_context
-                        .extension_data
-                        .insert(codex_api::ResponseId(response_id));
+                    turn_context.extension_data.insert(codex_api::ResponseId {
+                        value: response_id,
+                        account_scope: stream.account_scope.clone(),
+                    });
                 }
             }
             ResponseEvent::OutputItemDone(mut item) => {
@@ -2462,6 +2478,7 @@ async fn try_run_sampling_request(
                 }
 
                 let mut ctx = HandleOutputCtx {
+                    account_scope: stream.account_scope.clone(),
                     sess: sess.clone(),
                     turn_context: turn_context.clone(),
                     turn_store: Arc::clone(&turn_store),

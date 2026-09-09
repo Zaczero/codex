@@ -18,7 +18,7 @@ pub(super) enum ParentCompactionError {
 }
 
 pub(super) struct ParentCompaction {
-    pub(super) item: Option<ResponseItem>,
+    pub(super) item: Option<codex_history::ResponseItemEnvelope>,
     pub(super) model_hash: Option<String>,
 }
 
@@ -59,7 +59,13 @@ pub(super) fn select_parent_compaction(
         mode == GuardianContextMode::ThreadOwned || sampler.supports_parent_compaction(model_hash)
     });
     Ok(ParentCompaction {
-        item,
+        item: item.map(|item| codex_history::ResponseItemEnvelope {
+            item,
+            metadata: Some(codex_history::CodexHarnessMetadata {
+                account_scope: history.latest_compaction_account_scope().cloned(),
+                ..Default::default()
+            }),
+        }),
         model_hash: model_hash.map(str::to_owned),
     })
 }

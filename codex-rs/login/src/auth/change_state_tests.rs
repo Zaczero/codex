@@ -18,6 +18,28 @@ fn chatgpt_auth(user: &str, workspace: &str, token: &str) -> CodexAuth {
 }
 
 #[test]
+fn request_state_requires_the_same_local_account_and_known_external_owner() {
+    let mut first = CodexAuth::from_api_key("same-key");
+    let mut second = first.clone();
+    if let CodexAuth::ApiKey(auth) = &mut first {
+        auth.account_scope.local_account_id = Some("first".to_owned());
+    }
+    if let CodexAuth::ApiKey(auth) = &mut second {
+        auth.account_scope.local_account_id = Some("second".to_owned());
+    }
+    assert!(!first.same_account_as(&second));
+    assert!(first.same_account_as(&first.clone()));
+    assert_eq!(chatgpt_auth("", "workspace", "token").account_scope(), None);
+    assert!(
+        chatgpt_auth("user", "workspace", "old-token").same_account_as(&chatgpt_auth(
+            "user",
+            "workspace",
+            "new-token"
+        ))
+    );
+}
+
+#[test]
 fn auth_owner_generation_distinguishes_refreshes_from_identity_changes() {
     let manager = AuthManager::from_optional_auth_for_testing(/*auth*/ None);
     let mut changes = manager.auth_change_state_receiver();

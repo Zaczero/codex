@@ -168,6 +168,7 @@ async fn resumed_thread_does_not_wait_for_guardian_websocket_warmup() -> Result<
 
 #[derive(Default)]
 struct MockResponsesState {
+    account_scope: Mutex<Option<codex_protocol::auth::AccountScope>>,
     parent_requests: AtomicUsize,
     root_requests: AtomicUsize,
     guardian_reviews: AtomicUsize,
@@ -571,7 +572,15 @@ async fn luna_response(state: &MockResponsesState, request: Value) -> Vec<Value>
             .expect("root thread lock should not be poisoned")
             .as_ref()
             .is_some_and(|thread_id| {
-                request["prompt_cache_key"] == format!("guardian-v2:{thread_id}")
+                request["prompt_cache_key"]
+                    == codex_protocol::auth::account_scoped_cache_key(
+                        state
+                            .account_scope
+                            .lock()
+                            .expect("account scope lock")
+                            .as_ref(),
+                        &format!("guardian-v2:{thread_id}"),
+                    )
             });
     if !is_root_sample {
         state
@@ -829,6 +838,20 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             .disable_feature(Feature::EnableRequestCompression);
     }
     mock_config.write(codex_home.path())?;
+    let auth_config = load_default_config_for_test(&codex_home).await;
+    let auth_manager = codex_login::AuthManager::shared_from_config(
+        &auth_config,
+        /*enable_codex_api_key_env*/ false,
+    )
+    .await?;
+    let provider = codex_model_provider::create_model_provider(
+        auth_config.model_provider.clone(),
+        Some(auth_manager),
+    );
+    *responses_state
+        .account_scope
+        .lock()
+        .expect("account scope lock") = provider.auth().await.and_then(|auth| auth.account_scope());
     if node_repl_review_required {
         let config = load_default_config_for_test(&codex_home).await;
         let mut model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
@@ -1000,7 +1023,14 @@ async fn guardian_v2_routes_scoped_tool_approvals(
         let luna_request = wait_for_luna_request(responses_state.as_ref(), /*index*/ 0).await?;
         assert_eq!(
             luna_request["prompt_cache_key"],
-            format!("guardian-v2:{reviewed_thread_id}")
+            codex_protocol::auth::account_scoped_cache_key(
+                responses_state
+                    .account_scope
+                    .lock()
+                    .expect("account scope lock")
+                    .as_ref(),
+                &format!("guardian-v2:{reviewed_thread_id}")
+            )
         );
         if let Some(skill_path) = root_skill.as_ref() {
             let trusted_message = luna_request["input"]
@@ -1559,7 +1589,14 @@ async fn guardian_v2_routes_scoped_tool_approvals(
             wait_for_luna_request(responses_state.as_ref(), /*index*/ 2).await?;
         assert_eq!(
             post_authorization_change_sample["prompt_cache_key"],
-            format!("guardian-v2:{reviewed_thread_id}")
+            codex_protocol::auth::account_scoped_cache_key(
+                responses_state
+                    .account_scope
+                    .lock()
+                    .expect("account scope lock")
+                    .as_ref(),
+                &format!("guardian-v2:{reviewed_thread_id}")
+            )
         );
         assert!(
             sync_review_fragments(&post_authorization_change_sample).is_empty(),

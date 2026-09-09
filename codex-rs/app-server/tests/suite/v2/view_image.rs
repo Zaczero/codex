@@ -70,20 +70,22 @@ async fn fresh_context_subagent_inherits_disabled_view_image_and_mcp_tools() -> 
 
     let namespace = format!("mcp__{TEST_SERVER_NAME}");
     let message = "client-managed viewer remains available";
+    let mut spawn_call = responses::ev_function_call_with_namespace(
+        SPAWN_CALL_ID,
+        "collaboration",
+        "spawn_agent",
+        &serde_json::to_string(&json!({
+            "message": CHILD_PROMPT,
+            "task_name": "mcp_worker",
+            "fork_turns": "none",
+        }))?,
+    );
+    spawn_call["item"]["encrypted_function_args"] = json!([]);
     responses::mount_sse_once(
         &responses_server,
         responses::sse(vec![
             responses::ev_response_created("parent-spawn"),
-            responses::ev_function_call_with_namespace(
-                SPAWN_CALL_ID,
-                "collaboration",
-                "spawn_agent",
-                &serde_json::to_string(&json!({
-                    "message": CHILD_PROMPT,
-                    "task_name": "mcp_worker",
-                    "fork_turns": "none",
-                }))?,
-            ),
+            spawn_call,
             responses::ev_completed("parent-spawn"),
         ]),
     )

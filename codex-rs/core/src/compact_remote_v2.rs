@@ -364,7 +364,7 @@ async fn run_remote_compact_task_inner_impl(
 }
 
 struct RemoteCompactionV2Output {
-    compaction_output: ResponseItem,
+    compaction_output: ResponseItemEnvelope,
     response_id: String,
     token_usage: Option<TokenUsage>,
 }
@@ -441,7 +441,13 @@ async fn collect_compaction_output(
                 if let ResponseItem::Compaction { .. } = item {
                     compaction_count += 1;
                     if compaction_output.is_none() {
-                        compaction_output = Some(item);
+                        compaction_output = Some(ResponseItemEnvelope {
+                            item,
+                            metadata: Some(CodexHarnessMetadata {
+                                account_scope: stream.account_scope.clone(),
+                                ..Default::default()
+                            }),
+                        });
                     }
                 }
             }
@@ -491,7 +497,7 @@ async fn collect_compaction_output(
 fn build_v2_compacted_history(
     prompt_input: Vec<ResponseItem>,
     prompt_input_metadata: Vec<Option<CodexHarnessMetadata>>,
-    compaction_output: ResponseItem,
+    compaction_output: ResponseItemEnvelope,
     retain_client_developer_messages: bool,
     image_budget: RetainedImageBudget,
 ) -> (Vec<ResponseItemEnvelope>, usize) {
@@ -516,7 +522,7 @@ fn build_v2_compacted_history(
         .iter()
         .map(|envelope| retained_input_image_count(&envelope.item))
         .sum::<usize>();
-    retained.push(ResponseItemEnvelope::new(compaction_output));
+    retained.push(compaction_output);
     (retained, retained_image_count)
 }
 
@@ -784,7 +790,7 @@ mod tests {
         build_v2_compacted_history(
             input,
             metadata,
-            output,
+            output.into(),
             /*retain_client_developer_messages*/ false,
             RetainedImageBudget::Disabled,
         )
@@ -817,6 +823,7 @@ mod tests {
         }
         drop(tx_event);
         ResponseStream {
+            account_scope: None,
             rx_event,
             consumer_dropped: CancellationToken::new(),
         }
@@ -896,7 +903,7 @@ mod tests {
                     Some(CodexHarnessMetadata::default()),
                     None,
                 ],
-                output.clone(),
+                output.clone().into(),
                 enabled,
                 RetainedImageBudget::Disabled,
             );
@@ -1193,7 +1200,7 @@ mod tests {
             .await
             .expect("compaction should be collected");
 
-        assert_eq!(output.compaction_output, compaction);
+        assert_eq!(output.compaction_output.item, compaction);
         assert_eq!(output.response_id, "resp-compact");
         let event = rx.recv().await.expect("raw response completion");
         let EventMsg::RawResponseCompleted(completed) = event.msg else {

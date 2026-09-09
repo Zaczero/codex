@@ -115,10 +115,10 @@ fn test_codex_auth(auth_mode: Option<AuthMode>) -> Option<CodexAuth> {
         )
         .expect("test ChatGPT tokens should parse"),
         AuthMode::Headers => CodexAuth::Headers(AuthHeaders::new(http::HeaderMap::new())),
-        AuthMode::BedrockApiKey => CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-            api_key: "test-api-key".to_string(),
-            region: "us-east-1".to_string(),
-        }),
+        AuthMode::BedrockApiKey => CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+            "test-api-key".to_string(),
+            "us-east-1".to_string(),
+        )),
         AuthMode::BedrockAccessKeys => CodexAuth::BedrockAccessKeys(BedrockAccessKeysAuth {
             access_key_id: "test-access-key-id".to_string(),
             secret_access_key: "test-secret-access-key".to_string(),

@@ -101,6 +101,7 @@ async fn handle_spawn_agent(
     ),
     FunctionCallError,
 > {
+    let account_scope = invocation.originating_account_scope().await;
     let ToolInvocation {
         session,
         step_context,
@@ -169,13 +170,14 @@ async fn handle_spawn_agent(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let communication = communication_from_tool_message(
+    let mut communication = communication_from_tool_message(
         author,
         new_agent_path.clone(),
         message,
         &source,
         /*trigger_turn*/ true,
     );
+    communication.account_scope = account_scope;
     let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
     let multi_agent_v2_usage_hints =
         if is_full_history_fork && turn.multi_agent_version == MultiAgentVersion::V2 {

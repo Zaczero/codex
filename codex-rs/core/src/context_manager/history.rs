@@ -111,8 +111,8 @@ pub(crate) enum HistoryReplacement {
     Reset,
 }
 
-impl ConversationHistorySnapshot for SharedConversationHistory {
-    fn latest_compaction_model_hash(&self) -> Option<&str> {
+impl SharedConversationHistory {
+    fn latest_compaction_metadata(&self) -> Option<&CodexHarnessMetadata> {
         self.items
             .iter()
             .rev()
@@ -123,7 +123,18 @@ impl ConversationHistorySnapshot for SharedConversationHistory {
                 )
             })
             .and_then(|envelope| envelope.metadata.as_ref())
-            .and_then(|metadata| metadata.compaction_model_hash.as_deref())
+    }
+}
+
+impl ConversationHistorySnapshot for SharedConversationHistory {
+    fn latest_compaction_model_hash(&self) -> Option<&str> {
+        self.latest_compaction_metadata()?
+            .compaction_model_hash
+            .as_deref()
+    }
+
+    fn latest_compaction_account_scope(&self) -> Option<&codex_protocol::auth::AccountScope> {
+        self.latest_compaction_metadata()?.account_scope.as_ref()
     }
 
     fn retained_context(&self) -> Option<&RetainedContext> {
@@ -384,16 +395,6 @@ impl ContextManager {
                 user_authorization::UserMessageSource::Original,
             );
         }
-    }
-
-    /// Returns the history prepared for sending to the model. This applies a proper
-    /// normalization and drops un-suited items. Unsupported image and audio content
-    /// is stripped from messages and tool outputs according to `input_modalities`.
-    pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
-        self.for_prompt_annotated(input_modalities)
-            .into_iter()
-            .map(ResponseItemEnvelope::into_item)
-            .collect()
     }
 
     /// Returns normalized history envelopes for internal consumers that must retain metadata.

@@ -1282,6 +1282,30 @@ client_request_definitions! {
         response: v2::LogoutAccountResponse,
     },
 
+    AccountList => "account/list" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global_shared_read("account-auth"),
+        response: v2::AccountListResponse,
+    },
+
+    AccountRename => "account/rename" {
+        params: v2::AccountRenameParams,
+        serialization: global("account-auth"),
+        response: v2::AccountRenameResponse,
+    },
+
+    AccountSwitch => "account/switch" {
+        params: v2::AccountSwitchParams,
+        serialization: global("account-auth"),
+        response: v2::AccountSwitchResponse,
+    },
+
+    AccountRemove => "account/remove" {
+        params: v2::AccountRemoveParams,
+        serialization: global("account-auth"),
+        response: v2::AccountRemoveResponse,
+    },
+
     GetAccountRateLimits => "account/rateLimits/read" {
         params: #[ts(optional, as = "Option<GetAccountRateLimitsParamsTypeScript>", inline)] #[serde(default, skip_serializing_if = "Option::is_none")] v2::NullableGetAccountRateLimitsParams,
         serialization: None,
@@ -3381,6 +3405,7 @@ mod tests {
                 app_brand: None,
                 codex_streamlined_login: false,
                 use_hosted_login_success_page: false,
+                account_label: None,
             },
         };
         assert_eq!(
@@ -3389,7 +3414,8 @@ mod tests {
                 "id": 3,
                 "params": {
                     "type": "chatgpt",
-                    "appBrand": null
+                    "appBrand": null,
+                    "accountLabel": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -3405,6 +3431,7 @@ mod tests {
                 app_brand: None,
                 codex_streamlined_login: true,
                 use_hosted_login_success_page: false,
+                account_label: None,
             },
         };
         assert_eq!(
@@ -3414,7 +3441,8 @@ mod tests {
                 "params": {
                     "type": "chatgpt",
                     "appBrand": null,
-                    "codexStreamlinedLogin": true
+                    "codexStreamlinedLogin": true,
+                    "accountLabel": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -3430,6 +3458,7 @@ mod tests {
                 app_brand: Some(v2::LoginAppBrand::Chatgpt),
                 codex_streamlined_login: true,
                 use_hosted_login_success_page: true,
+                account_label: None,
             },
         };
         assert_eq!(
@@ -3440,7 +3469,8 @@ mod tests {
                     "type": "chatgpt",
                     "appBrand": "chatgpt",
                     "codexStreamlinedLogin": true,
-                    "useHostedLoginSuccessPage": true
+                    "useHostedLoginSuccessPage": true,
+                    "accountLabel": null
                 }
             }),
             serde_json::to_value(&request)?,
@@ -3452,14 +3482,17 @@ mod tests {
     fn serialize_account_login_chatgpt_device_code() -> Result<()> {
         let request = ClientRequest::LoginAccount {
             request_id: RequestId::Integer(4),
-            params: v2::LoginAccountParams::ChatgptDeviceCode,
+            params: v2::LoginAccountParams::ChatgptDeviceCode {
+                account_label: None,
+            },
         };
         assert_eq!(
             json!({
                 "method": "account/login/start",
                 "id": 4,
                 "params": {
-                    "type": "chatgptDeviceCode"
+                    "type": "chatgptDeviceCode",
+                    "accountLabel": null
                 }
             }),
             serde_json::to_value(&request)?,

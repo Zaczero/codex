@@ -1364,9 +1364,11 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
     assert_eq!(request_thread_id, thread_id_string.as_str());
     assert_eq!(request_originator, originator().value);
     assert_eq!(request_authorization, "Bearer Test API Key");
-    assert_eq!(
-        request_body["prompt_cache_key"].as_str(),
-        Some(session_id_string.as_str())
+    assert_ne!(
+        request_body["prompt_cache_key"]
+            .as_str()
+            .expect("account-scoped cache key"),
+        session_id_string
     );
     assert_codex_client_metadata(
         &request_body,
@@ -1579,15 +1581,18 @@ async fn send_request_with_provider(provider: ModelProviderInfo) {
     let responses_metadata = test_turn_responses_metadata(&client, thread_id);
     let mut client_session = client.new_session();
     let mut prompt = Prompt::default();
-    prompt.input.push(ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "hello".to_string(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    });
+    prompt.input.push(
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
 
     let mut stream = client_session
         .stream(
@@ -3071,98 +3076,124 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
     let mut client_session = client.new_session();
 
     let mut prompt = Prompt::default();
-    prompt.input.push(ResponseItem::Reasoning {
-        id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
-        summary: vec![ReasoningItemReasoningSummary::SummaryText {
-            text: "summary".into(),
-        }],
-        content: Some(vec![ReasoningItemContent::ReasoningText {
-            text: "content".into(),
-        }]),
-        encrypted_content: None,
-        internal_chat_message_metadata_passthrough: None,
-    });
-    prompt.input.push(ResponseItem::Message {
-        id: Some(ResponseItemId::with_suffix("msg", "message-id")),
-        role: "assistant".into(),
-        content: vec![ContentItem::OutputText {
-            text: "message".into(),
-        }],
-        phase: None,
-        internal_chat_message_metadata_passthrough: None,
-    });
-    prompt.input.push(ResponseItem::WebSearchCall {
-        id: Some(ResponseItemId::with_suffix("ws", "web-search-id")),
-        status: Some("completed".into()),
-        action: Some(WebSearchAction::Search {
-            query: Some("weather".into()),
-            queries: None,
-        }),
-        internal_chat_message_metadata_passthrough: None,
-    });
-    prompt.input.push(ResponseItem::FunctionCall {
-        id: Some(ResponseItemId::with_suffix("fc", "function-id")),
-        name: "do_thing".into(),
-        namespace: None,
-        arguments: "{}".into(),
-        call_id: "function-call-id".into(),
-        encrypted_function_args: None,
-        internal_chat_message_metadata_passthrough: None,
-    });
-    prompt.input.push(ResponseItem::FunctionCallOutput {
-        id: None,
-        call_id: Some("function-call-id".into()),
-        name: None,
-        namespace: None,
-        output: FunctionCallOutputPayload::from_text("ok".into()),
-        internal_chat_message_metadata_passthrough: None,
-    });
-    prompt.input.push(ResponseItem::LocalShellCall {
-        id: Some(ResponseItemId::with_suffix("lsh", "local-shell-id")),
-        call_id: Some("local-shell-call-id".into()),
-        status: LocalShellStatus::Completed,
-        action: LocalShellAction::Exec(LocalShellExecAction {
-            command: vec!["echo".into(), "hello".into()],
-            timeout_ms: None,
-            working_directory: None,
-            env: None,
-            user: None,
-        }),
-        internal_chat_message_metadata_passthrough: None,
-    });
-    prompt.input.push(ResponseItem::CustomToolCall {
-        id: Some(ResponseItemId::with_suffix("ctc", "custom-tool-id")),
-        status: Some("completed".into()),
-        call_id: "custom-tool-call-id".into(),
-        name: "custom_tool".into(),
-        namespace: None,
-        input: "{}".into(),
-        internal_chat_message_metadata_passthrough: None,
-    });
-    prompt.input.push(ResponseItem::CustomToolCallOutput {
-        id: None,
-        call_id: "custom-tool-call-id".into(),
-        name: None,
-        output: FunctionCallOutputPayload::from_text("ok".into()),
-        internal_chat_message_metadata_passthrough: None,
-    });
     prompt.input.push(
-        serde_json::from_value(json!({
+        ResponseItem::Reasoning {
+            id: Some(ResponseItemId::with_suffix("rs", "reasoning-id")),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "summary".into(),
+            }],
+            content: Some(vec![ReasoningItemContent::ReasoningText {
+                text: "content".into(),
+            }]),
+            encrypted_content: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
+    prompt.input.push(
+        ResponseItem::Message {
+            id: Some(ResponseItemId::with_suffix("msg", "message-id")),
+            role: "assistant".into(),
+            content: vec![ContentItem::OutputText {
+                text: "message".into(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
+    prompt.input.push(
+        ResponseItem::WebSearchCall {
+            id: Some(ResponseItemId::with_suffix("ws", "web-search-id")),
+            status: Some("completed".into()),
+            action: Some(WebSearchAction::Search {
+                query: Some("weather".into()),
+                queries: None,
+            }),
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
+    prompt.input.push(
+        ResponseItem::FunctionCall {
+            id: Some(ResponseItemId::with_suffix("fc", "function-id")),
+            name: "do_thing".into(),
+            namespace: None,
+            arguments: "{}".into(),
+            call_id: "function-call-id".into(),
+            encrypted_function_args: None,
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
+    prompt.input.push(
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: Some("function-call-id".into()),
+            name: None,
+            namespace: None,
+            output: FunctionCallOutputPayload::from_text("ok".into()),
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
+    prompt.input.push(
+        ResponseItem::LocalShellCall {
+            id: Some(ResponseItemId::with_suffix("lsh", "local-shell-id")),
+            call_id: Some("local-shell-call-id".into()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["echo".into(), "hello".into()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
+    prompt.input.push(
+        ResponseItem::CustomToolCall {
+            id: Some(ResponseItemId::with_suffix("ctc", "custom-tool-id")),
+            status: Some("completed".into()),
+            call_id: "custom-tool-call-id".into(),
+            name: "custom_tool".into(),
+            namespace: None,
+            input: "{}".into(),
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
+    prompt.input.push(
+        ResponseItem::CustomToolCallOutput {
+            id: None,
+            call_id: "custom-tool-call-id".into(),
+            name: None,
+            output: FunctionCallOutputPayload::from_text("ok".into()),
+            internal_chat_message_metadata_passthrough: None,
+        }
+        .into(),
+    );
+    prompt.input.push(
+        serde_json::from_value::<ResponseItem>(json!({
             "type": "message",
             "id": "018f9e15-7a6a-7000-8000-000000000001",
             "role": "user",
             "content": [{"type": "input_text", "text": "legacy message"}],
         }))
-        .expect("legacy response item should deserialize"),
+        .expect("legacy response item should deserialize")
+        .into(),
     );
     prompt.input.push(
-        serde_json::from_value(json!({
+        serde_json::from_value::<ResponseItem>(json!({
             "type": "message",
             "id": "",
             "role": "user",
             "content": [{"type": "input_text", "text": "empty-id message"}],
         }))
-        .expect("response item with an empty id should deserialize"),
+        .expect("response item with an empty id should deserialize")
+        .into(),
     );
 
     let mut stream = client_session

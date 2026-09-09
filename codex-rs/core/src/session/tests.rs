@@ -12303,6 +12303,7 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         internal_chat_message_metadata_passthrough: None,
     };
     let mut ctx = HandleOutputCtx {
+        account_scope: None,
         sess: Arc::clone(&sess),
         turn_context: Arc::clone(&tc),
         turn_store: Arc::new(codex_extension_api::ExtensionData::new(tc.sub_id.clone())),

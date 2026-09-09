@@ -79,10 +79,17 @@ pub enum LoginAccountParams {
         #[serde(default)]
         #[ts(optional = nullable)]
         app_brand: Option<LoginAppBrand>,
+        /// Insert successful credentials under this local label instead of replacing the active record.
+        #[ts(optional = nullable)]
+        account_label: Option<String>,
     },
-    #[serde(rename = "chatgptDeviceCode")]
-    #[ts(rename = "chatgptDeviceCode")]
-    ChatgptDeviceCode,
+    #[serde(rename = "chatgptDeviceCode", rename_all = "camelCase")]
+    #[ts(rename = "chatgptDeviceCode", rename_all = "camelCase")]
+    ChatgptDeviceCode {
+        /// Insert successful credentials under this local label instead of replacing the active record.
+        #[ts(optional = nullable)]
+        account_label: Option<String>,
+    },
     /// [UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE.
     /// The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.
     #[experimental("account/login/start.chatgptAuthTokens")]
@@ -186,6 +193,70 @@ pub enum CancelLoginAccountStatus {
 #[ts(export_to = "v2/")]
 pub struct CancelLoginAccountResponse {
     pub status: CancelLoginAccountStatus,
+}
+
+/// Metadata for one locally named credential record. Credential material is never included.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct NamedAccount {
+    pub id: String,
+    pub label: String,
+    pub is_active: bool,
+    pub account_id: Option<String>,
+    pub email: Option<String>,
+    pub auth_mode: AuthMode,
+    pub plan_type: Option<PlanType>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountListResponse {
+    pub accounts: Vec<NamedAccount>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountRenameParams {
+    pub account_id: String,
+    pub label: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSwitchParams {
+    pub account_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountRemoveParams {
+    pub account_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountRenameResponse {
+    pub account: NamedAccount,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSwitchResponse {
+    pub account: NamedAccount,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountRemoveResponse {
+    pub removed: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

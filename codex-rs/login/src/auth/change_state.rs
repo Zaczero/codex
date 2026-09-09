@@ -2,6 +2,35 @@
 
 use super::CodexAuth;
 
+impl CodexAuth {
+    /// Whether request-scoped server state can be reused with these credentials.
+    pub fn same_account_as(&self, other: &Self) -> bool {
+        match (self.account_scope(), other.account_scope()) {
+            (Some(previous), Some(current)) => return previous == current,
+            (Some(_), None) | (None, Some(_)) => return false,
+            (None, None) => {}
+        }
+        if same_owner(Some(self), Some(other)) {
+            return true;
+        }
+        match (self, other) {
+            (Self::ApiKey(_), Self::ApiKey(_)) => self.api_key() == other.api_key(),
+            (Self::Chatgpt(_), Self::Chatgpt(_)) => {
+                self.get_current_auth_json() == other.get_current_auth_json()
+            }
+            (Self::ChatgptAuthTokens(_), Self::ChatgptAuthTokens(_)) => {
+                self.get_current_token_data() == other.get_current_token_data()
+            }
+            (Self::Headers(a), Self::Headers(b)) => a == b,
+            (Self::AgentIdentity(a), Self::AgentIdentity(b)) => a.record() == b.record(),
+            (Self::PersonalAccessToken(a), Self::PersonalAccessToken(b)) => a == b,
+            (Self::BedrockApiKey(a), Self::BedrockApiKey(b)) => a == b,
+            (Self::BedrockAccessKeys(a), Self::BedrockAccessKeys(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 /// Opaque revisions local to one auth manager. Consumers must reset on reconnect.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AuthChangeState {

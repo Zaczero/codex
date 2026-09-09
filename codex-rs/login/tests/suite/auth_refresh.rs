@@ -1459,12 +1459,17 @@ async fn unauthorized_recovery_errors_on_account_mismatch() -> Result<()> {
 
     let cached_after = ctx
         .auth_manager
-        .auth_cached()
-        .context("auth should remain cached after refresh")?;
+        .auth()
+        .await
+        .context("current stored account should be available")?;
     let cached_after_tokens = cached_after
         .get_token_data()
         .context("token data should remain cached")?;
-    assert_eq!(cached_after_tokens, initial_tokens);
+    assert_eq!(
+        cached_after_tokens,
+        disk_auth.tokens.context("stored tokens")?
+    );
+    assert_eq!(cached_before.get_token_data()?, initial_tokens);
 
     server.verify().await;
     Ok(())
@@ -1502,6 +1507,45 @@ async fn unauthorized_recovery_requires_chatgpt_auth() -> Result<()> {
     let requests = server.received_requests().await.unwrap_or_default();
     assert!(requests.is_empty(), "expected no refresh token requests");
 
+    Ok(())
+}
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn refresh_rejects_replaced_account_before_contacting_authority() -> Result<()> {
+    let server = MockServer::start().await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial: AuthDotJson = serde_json::from_value(json!({
+        "auth_mode": "chatgpt",
+        "tokens": build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN),
+        "last_refresh": Utc::now()
+    }))?;
+    ctx.write_auth(&initial).await?;
+    let original = ctx.auth_manager.auth_cached().context("original auth")?;
+    let replacement: AuthDotJson = serde_json::from_value(json!({
+        "auth_mode": "apikey", "OPENAI_API_KEY": "replacement-api-key"
+    }))?;
+    save_auth(
+        ctx.codex_home.path(),
+        &replacement,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    let error = ctx
+        .auth_manager
+        .refresh_token_from_authority()
+        .await
+        .expect_err("replacement must not be installed into the original auth snapshot");
+    assert!(
+        matches!(error, RefreshTokenError::Transient(_)),
+        "{error:?}"
+    );
+    assert_eq!(
+        original.get_token_data()?,
+        initial.tokens.context("initial tokens")?
+    );
+    assert_eq!(ctx.load_auth()?, replacement);
+    assert!(server.received_requests().await.unwrap().is_empty());
     Ok(())
 }
 
@@ -1578,6 +1622,66 @@ async fn refresh_does_not_overwrite_replaced_or_deleted_credentials() -> Result<
         );
         server.verify().await;
     }
+    Ok(())
+}
+
+#[serial_test::serial(auth_env)]
+#[tokio::test]
+async fn request_recovery_refreshes_original_account_without_changing_selection() -> Result<()> {
+    let server = MockServer::start().await;
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let original = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        tokens: Some(build_tokens("account-a-access", "account-a-refresh")),
+        last_refresh: Some(Utc::now()),
+        openai_api_key: None,
+        agent_identity: None,
+        personal_access_token: None,
+        bedrock_api_key: None,
+        bedrock_access_keys: None,
+    };
+    ctx.write_auth(&original).await?;
+    let request_auth = ctx.auth_manager.auth().await.context("account A")?;
+    let mut recovery = ctx
+        .auth_manager
+        .unauthorized_recovery_for_request(Some(request_auth.clone()));
+    let selected: AuthDotJson = serde_json::from_value(json!({
+        "auth_mode": "apikey", "OPENAI_API_KEY": "account-b-key"
+    }))?;
+    codex_login::auth::save_named_account(
+        ctx.codex_home.path(),
+        "second",
+        &selected,
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )?;
+    ctx.auth_manager.reload().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(wiremock::matchers::body_partial_json(
+            json!({"refresh_token": "account-a-refresh"}),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "account-a-refreshed", "refresh_token": "account-a-rotated"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    recovery.next().await?;
+    recovery.next().await?;
+    let mut expected_tokens = original.tokens.context("original tokens")?;
+    expected_tokens.access_token = "account-a-refreshed".to_string();
+    expected_tokens.refresh_token = "account-a-rotated".to_string();
+    assert_eq!(request_auth.get_token_data()?, expected_tokens);
+    assert_eq!(ctx.load_auth()?, selected);
+    assert_eq!(
+        ctx.auth_manager
+            .auth()
+            .await
+            .context("account B")?
+            .api_key(),
+        Some("account-b-key")
+    );
     Ok(())
 }
 

@@ -53,7 +53,10 @@ fn prompt_with_image_outputs() -> Prompt {
                 ]),
                 internal_chat_message_metadata_passthrough: None,
             },
-        ],
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect(),
         ..Default::default()
     }
 }
@@ -63,7 +66,9 @@ fn responses_lite_request_copies_strip_image_details() {
     let prompt = prompt_with_image_outputs();
     let original = prompt.input.clone();
 
-    let stripped = prompt.get_formatted_input_for_request(/*use_responses_lite*/ true);
+    let stripped = prompt.get_formatted_input_for_request(
+        /*use_responses_lite*/ true, /*account_scope*/ None,
+    );
 
     assert_eq!(
         stripped,
@@ -107,8 +112,13 @@ fn responses_lite_request_copies_strip_image_details() {
     );
     assert_eq!(prompt.input, original);
     assert_eq!(
-        prompt.get_formatted_input_for_request(/*use_responses_lite*/ false),
+        prompt.get_formatted_input_for_request(
+            /*use_responses_lite*/ false, /*account_scope*/ None
+        ),
         original
+            .into_iter()
+            .map(ResponseItemEnvelope::into_item)
+            .collect::<Vec<_>>()
     );
 }
 

@@ -301,6 +301,7 @@ async fn handle_output_item_done_returns_contributed_last_agent_message() {
     let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), step_context, tracker);
     let item = assistant_output_text("original assistant text");
     let mut ctx = HandleOutputCtx {
+        account_scope: None,
         sess: session,
         turn_context: Arc::clone(&turn_context),
         turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),

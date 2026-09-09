@@ -132,7 +132,7 @@ async fn cyber_refusal_reads_eligibility_without_changing_the_model() -> Result<
     Ok(())
 }
 
-async fn wait_for_notice(cache: &crate::daybreak::NoticeCache) -> Notice {
+pub(super) async fn wait_for_notice(cache: &crate::daybreak::NoticeCache) -> Notice {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
             if let Some(notice) = cache.get() {

@@ -102,9 +102,17 @@ pub(crate) async fn build_prompt_input_from_session(
     let prompt_input = sess
         .clone_history()
         .await
-        .for_prompt(&step_context.settings.model_info.input_modalities);
+        .for_prompt_annotated(&step_context.settings.model_info.input_modalities);
     let base_instructions = sess.get_base_instructions().await;
     let prompt = build_prompt(prompt_input, step_context.as_ref(), base_instructions);
 
-    Ok(prompt.input)
+    let account_scope = turn_context
+        .provider
+        .auth()
+        .await
+        .and_then(|auth| auth.account_scope());
+    Ok(prompt.get_formatted_input_for_request(
+        step_context.settings.model_info.use_responses_lite,
+        account_scope.as_ref(),
+    ))
 }

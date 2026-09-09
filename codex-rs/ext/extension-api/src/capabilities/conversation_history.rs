@@ -29,6 +29,11 @@ pub trait ConversationHistorySnapshot: Send + Sync {
         None
     }
 
+    /// Request-bound producer of the latest checkpoint; absent for unprovenanced history.
+    fn latest_compaction_account_scope(&self) -> Option<&codex_protocol::auth::AccountScope> {
+        None
+    }
+
     /// Original review evidence retained across parent compaction, in conversation order.
     /// Hosts without separate retention provide their current history.
     fn review_items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {

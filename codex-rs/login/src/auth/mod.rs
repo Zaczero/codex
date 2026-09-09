@@ -13,6 +13,7 @@ mod workload_identity;
 
 mod external_bearer;
 mod manager;
+mod named_accounts;
 mod revoke;
 
 pub use auth_headers::AuthHeaders;
@@ -24,4 +25,6 @@ pub use change_state::AuthChangeState;
 pub use error::RefreshTokenFailedError;
 pub use error::RefreshTokenFailedReason;
 pub use manager::*;
+pub use named_accounts::NamedAccountError;
+pub use named_accounts::NamedAccountMetadata;
 pub use workload_identity::is_workload_identity_selected;

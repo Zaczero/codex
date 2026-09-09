@@ -219,7 +219,7 @@ pub(crate) enum TurnToolSource {
 #[derive(Clone, Debug)]
 pub struct CodexResponsesMetadata {
     /// Guardian parent reference; projected only onto a Guardian request.
-    pub(crate) parent_response_id: Option<String>,
+    pub(crate) parent_response_id: Option<codex_api::ResponseId>,
     pub(crate) installation_id: String,
     pub(crate) session_id: String,
     pub(crate) thread_id: String,

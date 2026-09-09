@@ -77,6 +77,24 @@ enum BedrockLoginCredentials {
     },
 }
 
+fn named_account_to_api(
+    account: codex_login::NamedAccountMetadata,
+) -> codex_app_server_protocol::NamedAccount {
+    codex_app_server_protocol::NamedAccount {
+        id: account.id,
+        label: account.label,
+        is_active: account.is_active,
+        account_id: account.account_id,
+        email: account.email,
+        auth_mode: auth_mode_to_api(account.auth_mode),
+        plan_type: account
+            .plan_type
+            .as_deref()
+            .map(codex_protocol::auth::PlanType::from_raw_value)
+            .map(Into::into),
+    }
+}
+
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.cancel();
@@ -101,14 +119,41 @@ impl AccountRequestProcessor {
         config: Arc<Config>,
         config_manager: ConfigManager,
     ) -> Self {
-        Self {
+        let processor = Self {
             auth_manager,
             thread_manager,
             outgoing,
             config,
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
-        }
+        };
+        processor.spawn_auth_change_notifications();
+        processor
+    }
+
+    fn spawn_auth_change_notifications(&self) {
+        let mut changes = self.auth_manager.auth_change_receiver();
+        let auth_manager = Arc::downgrade(&self.auth_manager);
+        let outgoing = Arc::clone(&self.outgoing);
+        tokio::spawn(async move {
+            while changes.changed().await.is_ok() {
+                let Some(auth_manager) = auth_manager.upgrade() else {
+                    break;
+                };
+                let auth = auth_manager.auth_cached();
+                outgoing
+                    .send_server_notification(ServerNotification::AccountUpdated(
+                        AccountUpdatedNotification {
+                            auth_mode: auth
+                                .as_ref()
+                                .map(CodexAuth::api_auth_mode)
+                                .map(auth_mode_to_api),
+                            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+                        },
+                    ))
+                    .await;
+            }
+        });
     }
 
     pub(crate) async fn login_account(
@@ -124,6 +169,75 @@ impl AccountRequestProcessor {
         request_id: ConnectionRequestId,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.logout_v2(request_id).await.map(|()| None)
+    }
+
+    pub(crate) async fn list_named_accounts(
+        &self,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let accounts = self
+            .config
+            .auth_config()
+            .list_named_accounts()
+            .map_err(|err| internal_error(format!("failed to list named accounts: {err}")))?
+            .into_iter()
+            .map(named_account_to_api)
+            .collect();
+        Ok(Some(AccountListResponse { accounts }.into()))
+    }
+
+    pub(crate) async fn rename_named_account(
+        &self,
+        params: AccountRenameParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.ensure_named_accounts_allowed()?;
+        let account = self
+            .config
+            .auth_config()
+            .rename_named_account(&params.account_id, &params.label)
+            .map_err(|err| invalid_request(err.to_string()))?;
+        self.auth_manager.reload().await;
+        Ok(Some(
+            AccountRenameResponse {
+                account: named_account_to_api(account),
+            }
+            .into(),
+        ))
+    }
+
+    pub(crate) async fn switch_named_account(
+        &self,
+        params: AccountSwitchParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.ensure_named_accounts_allowed()?;
+        let account = self
+            .config
+            .auth_config()
+            .switch_named_account(&params.account_id)
+            .map_err(|err| invalid_request(err.to_string()))?;
+        self.auth_manager.reload().await;
+        self.config_manager.clear_cloud_config_bundle_loader();
+        Ok(Some(
+            AccountSwitchResponse {
+                account: named_account_to_api(account),
+            }
+            .into(),
+        ))
+    }
+
+    pub(crate) async fn remove_named_account(
+        &self,
+        params: AccountRemoveParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.ensure_named_accounts_allowed()?;
+        let removed = self
+            .config
+            .auth_config()
+            .remove_named_account(&params.account_id)
+            .await
+            .map_err(|err| invalid_request(err.to_string()))?;
+        self.auth_manager.reload().await;
+        self.config_manager.clear_cloud_config_bundle_loader();
+        Ok(Some(AccountRemoveResponse { removed }.into()))
     }
 
     pub(crate) async fn cancel_login_account(
@@ -199,15 +313,14 @@ impl AccountRequestProcessor {
         self.auth_manager.clear_external_auth();
     }
 
-    fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
-        let auth = self.auth_manager.auth_cached();
-        AccountUpdatedNotification {
-            auth_mode: auth
-                .as_ref()
-                .map(CodexAuth::api_auth_mode)
-                .map(auth_mode_to_api),
-            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+    fn ensure_named_accounts_allowed(&self) -> Result<(), JSONRPCErrorError> {
+        if self.auth_manager.is_workload_identity_selected() {
+            return Err(self.configured_auth_owned_by_host_error());
         }
+        if self.auth_manager.is_external_chatgpt_auth_active() {
+            return Err(self.external_auth_active_error());
+        }
+        Ok(())
     }
 
     async fn load_latest_config(&self) -> Config {
@@ -305,6 +418,7 @@ impl AccountRequestProcessor {
                 app_brand,
                 codex_streamlined_login,
                 use_hosted_login_success_page,
+                account_label,
             } => {
                 let login_success_page = if use_hosted_login_success_page {
                     let app_brand = match app_brand.unwrap_or_default() {
@@ -320,11 +434,17 @@ impl AccountRequestProcessor {
                 } else {
                     LoginSuccessPage::default()
                 };
-                self.login_chatgpt_v2(request_id, codex_streamlined_login, login_success_page)
-                    .await;
+                self.login_chatgpt_v2(
+                    request_id,
+                    codex_streamlined_login,
+                    login_success_page,
+                    account_label,
+                )
+                .await;
             }
-            LoginAccountParams::ChatgptDeviceCode => {
-                self.login_chatgpt_device_code_v2(request_id).await;
+            LoginAccountParams::ChatgptDeviceCode { account_label } => {
+                self.login_chatgpt_device_code_v2(request_id, account_label)
+                    .await;
             }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
@@ -545,6 +665,7 @@ impl AccountRequestProcessor {
         &self,
         codex_streamlined_login: bool,
         login_success_page: LoginSuccessPage,
+        account_label: Option<String>,
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
@@ -574,6 +695,12 @@ impl AccountRequestProcessor {
                 config.auth_route_config(),
             )
         };
+        if let Some(label) = account_label {
+            if label.trim().is_empty() {
+                return Err(invalid_request("account label must not be empty"));
+            }
+            opts.named_account_label = Some(label);
+        }
         if let Ok(issuer) = std::env::var(LOGIN_ISSUER_OVERRIDE_ENV_VAR)
             && !issuer.trim().is_empty()
         {
@@ -606,9 +733,10 @@ impl AccountRequestProcessor {
         request_id: ConnectionRequestId,
         codex_streamlined_login: bool,
         login_success_page: LoginSuccessPage,
+        account_label: Option<String>,
     ) {
         let result = self
-            .login_chatgpt_response(codex_streamlined_login, login_success_page)
+            .login_chatgpt_response(codex_streamlined_login, login_success_page, account_label)
             .await;
         self.outgoing.send_result(request_id, result).await;
     }
@@ -617,9 +745,10 @@ impl AccountRequestProcessor {
         &self,
         codex_streamlined_login: bool,
         login_success_page: LoginSuccessPage,
+        account_label: Option<String>,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         let opts = self
-            .login_chatgpt_common(codex_streamlined_login, login_success_page)
+            .login_chatgpt_common(codex_streamlined_login, login_success_page, account_label)
             .await?;
         let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
@@ -694,18 +823,24 @@ impl AccountRequestProcessor {
         })
     }
 
-    async fn login_chatgpt_device_code_v2(&self, request_id: ConnectionRequestId) {
-        let result = self.login_chatgpt_device_code_response().await;
+    async fn login_chatgpt_device_code_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        account_label: Option<String>,
+    ) {
+        let result = self.login_chatgpt_device_code_response(account_label).await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_device_code_response(
         &self,
+        account_label: Option<String>,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         let opts = self
             .login_chatgpt_common(
                 /*codex_streamlined_login*/ false,
                 LoginSuccessPage::default(),
+                account_label,
             )
             .await?;
         let device_code = request_device_code(&opts)
@@ -896,12 +1031,6 @@ impl AccountRequestProcessor {
                 payload_login_completed,
             ))
             .await;
-
-        self.outgoing
-            .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
-            ))
-            .await;
     }
 
     async fn send_chatgpt_login_completion_notifications(
@@ -935,16 +1064,6 @@ impl AccountRequestProcessor {
                 auth.clone(),
             )
             .await;
-            let payload_v2 = AccountUpdatedNotification {
-                auth_mode: auth
-                    .as_ref()
-                    .map(CodexAuth::api_auth_mode)
-                    .map(auth_mode_to_api),
-                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
-            };
-            outgoing
-                .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
-                .await;
         }
     }
 
@@ -993,24 +1112,10 @@ impl AccountRequestProcessor {
 
     async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), JSONRPCErrorError> {
         let result = self.logout_common().await;
-        let account_updated =
-            result
-                .as_ref()
-                .ok()
-                .cloned()
-                .map(|auth_mode| AccountUpdatedNotification {
-                    auth_mode,
-                    plan_type: None,
-                });
         self.outgoing
             .send_result(request_id, result.map(|_| LogoutAccountResponse {}))
             .await;
 
-        if let Some(payload) = account_updated {
-            self.outgoing
-                .send_server_notification(ServerNotification::AccountUpdated(payload))
-                .await;
-        }
         Ok(())
     }
 

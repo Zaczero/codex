@@ -509,6 +509,9 @@ impl ChatWidget {
                     self.open_usage_menu();
                 }
             }
+            SlashCommand::Account => {
+                self.app_event_tx.send(AppEvent::OpenAccountPicker);
+            }
             SlashCommand::Ide => {
                 self.handle_ide_command();
             }
@@ -1175,6 +1178,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
+            | SlashCommand::Account
             | SlashCommand::Pwd
             | SlashCommand::Usage
             | SlashCommand::DebugConfig

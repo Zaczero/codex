@@ -806,6 +806,10 @@ impl FromStr for ThreadHistoryMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct InterAgentCommunication {
+    /// Producer identity carried by the host until the message enters durable history.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub account_scope: Option<crate::auth::AccountScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub id: Option<ResponseItemId>,
@@ -832,6 +836,7 @@ impl InterAgentCommunication {
         trigger_turn: bool,
     ) -> Self {
         Self {
+            account_scope: None,
             id: None,
             author,
             recipient,
@@ -851,6 +856,7 @@ impl InterAgentCommunication {
         trigger_turn: bool,
     ) -> Self {
         Self {
+            account_scope: None,
             id: None,
             author,
             recipient,
@@ -4618,6 +4624,7 @@ mod tests {
     #[test]
     fn inter_agent_communication_response_input_item_preserves_commentary_phase() {
         let mut communication = InterAgentCommunication {
+            account_scope: None,
             id: Some(ResponseItemId::with_suffix("amsg", "1")),
             author: AgentPath::root(),
             recipient: AgentPath::root().join("reviewer").expect("recipient path"),

@@ -15,6 +15,40 @@ use codex_keyring_store::tests::MockKeyringStore;
 use keyring::Error as KeyringError;
 
 #[test]
+fn malformed_bank_is_not_overwritten_by_login() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    let storage = file_storage(home.path());
+    let auth = auth_with_prefix("replacement");
+    for malformed in [
+        json!({"version": 1, "selected_account_id": "missing", "accounts": {}}),
+        json!({"version": 1, "accounts": {
+            "one": {"label": "duplicate", "auth": auth},
+            "two": {"label": "duplicate", "auth": auth}
+        }}),
+        json!({"version": 1, "accounts": {"one": {"label": " padded ", "auth": auth}}}),
+        json!({"version": 1}),
+    ] {
+        let serialized = serde_json::to_string(&malformed)?;
+        std::fs::write(get_auth_file(home.path()), &serialized)?;
+        assert!(storage.load().is_err());
+        assert!(storage.save(&auth).is_err());
+        assert_eq!(
+            std::fs::read_to_string(get_auth_file(home.path()))?,
+            serialized
+        );
+    }
+    Ok(())
+}
+
+fn file_storage(home: &Path) -> Arc<AuthStorage> {
+    create_auth_storage(
+        home.to_path_buf(),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )
+}
+
+#[test]
 fn token_refresh_preserves_concurrent_agent_identity_enrollment() -> anyhow::Result<()> {
     let home = tempdir()?;
     let storage = create_auth_storage(
@@ -34,13 +68,17 @@ fn token_refresh_preserves_concurrent_agent_identity_enrollment() -> anyhow::Res
     storage.save(&initial)?;
     let mut enrolled = initial.clone();
     enrolled.agent_identity = Some(AgentIdentityStorage::Jwt("enrolled-identity".to_string()));
-    storage.replace_if_unchanged(&initial, &enrolled)?;
+    let account_id = storage
+        .load_bank()?
+        .selected_account_id
+        .context("selected account")?;
+    storage.replace_if_unchanged_for_account(&account_id, &initial, &enrolled)?;
 
     let mut refreshed = initial.clone();
     let tokens = refreshed.tokens.as_mut().context("initial tokens")?;
     tokens.access_token = "refreshed-access".to_string();
     tokens.refresh_token = "refreshed-refresh".to_string();
-    let committed = storage.refresh_tokens(&initial, &refreshed)?;
+    let committed = storage.refresh_tokens_for_account(&account_id, &initial, &refreshed)?;
     refreshed.agent_identity = enrolled.agent_identity;
     assert_eq!(committed, refreshed);
     assert_eq!(storage.load()?, Some(refreshed));
@@ -50,7 +88,7 @@ fn token_refresh_preserves_concurrent_agent_identity_enrollment() -> anyhow::Res
 #[tokio::test]
 async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("test-key".to_string()),
@@ -74,7 +112,7 @@ async fn file_storage_load_returns_auth_dot_json() -> anyhow::Result<()> {
 #[tokio::test]
 async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(AuthMode::ApiKey),
         openai_api_key: Some("test-key".to_string()),
@@ -91,9 +129,8 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
         .save(&auth_dot_json)
         .context("failed to save auth file")?;
 
-    let same_auth_dot_json = storage
-        .try_read_auth_json(&file)
-        .context("failed to read auth file after save")?;
+    let saved: StoredAuthBank = serde_json::from_str(&std::fs::read_to_string(file)?)?;
+    let same_auth_dot_json = saved.selected().context("saved selected account")?.auth;
     assert_eq!(auth_dot_json, same_auth_dot_json);
     Ok(())
 }
@@ -101,7 +138,7 @@ async fn file_storage_save_persists_auth_dot_json() -> anyhow::Result<()> {
 #[tokio::test]
 async fn file_storage_round_trips_agent_identity_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     let agent_identity = jwt_with_payload(json!({
         "agent_runtime_id": "agent-runtime-id",
         "agent_private_key": "private-key",
@@ -132,7 +169,7 @@ async fn file_storage_round_trips_agent_identity_auth() -> anyhow::Result<()> {
 #[tokio::test]
 async fn file_storage_round_trips_registered_agent_identity_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     let record = AgentIdentityAuthRecord {
         agent_runtime_id: "agent-runtime-id".to_string(),
         agent_private_key: "private-key".to_string(),
@@ -164,7 +201,7 @@ async fn file_storage_round_trips_registered_agent_identity_auth() -> anyhow::Re
 #[tokio::test]
 async fn file_storage_loads_empty_agent_identity_email_as_none() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     let auth_file = get_auth_file(codex_home.path());
     std::fs::write(
         &auth_file,
@@ -212,7 +249,7 @@ async fn file_storage_loads_empty_agent_identity_email_as_none() -> anyhow::Resu
 #[tokio::test]
 async fn file_storage_writes_missing_agent_identity_email_as_empty_string() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
@@ -237,7 +274,13 @@ async fn file_storage_writes_missing_agent_identity_email_as_empty_string() -> a
 
     let auth_file = get_auth_file(codex_home.path());
     let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(auth_file)?)?;
-    assert_eq!(saved["agent_identity"]["email"], "");
+    let selected_id = saved["selected_account_id"]
+        .as_str()
+        .context("selected account ID")?;
+    assert_eq!(
+        saved["accounts"][selected_id]["auth"]["agent_identity"]["email"],
+        ""
+    );
     assert_eq!(storage.load()?, Some(auth_dot_json));
     Ok(())
 }
@@ -245,7 +288,7 @@ async fn file_storage_writes_missing_agent_identity_email_as_empty_string() -> a
 #[tokio::test]
 async fn file_storage_round_trips_personal_access_token_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(AuthMode::PersonalAccessToken),
         openai_api_key: None,
@@ -267,7 +310,7 @@ async fn file_storage_round_trips_personal_access_token_auth() -> anyhow::Result
 #[tokio::test]
 async fn file_storage_loads_agent_identity_as_jwt() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     let agent_identity_jwt = jwt_with_payload(json!({
         "agent_runtime_id": "agent-runtime-id",
         "agent_private_key": "private-key",
@@ -396,7 +439,7 @@ fn seed_secrets_backend_with_auth(
 fn assert_keyring_saved_auth_and_removed_fallback(
     mock_keyring: &MockKeyringStore,
     codex_home: &Path,
-    expected: &AuthDotJson,
+    expected: &StoredAuthBank,
 ) -> anyhow::Result<()> {
     let manager = SecretsManager::new_with_keyring_store_and_namespace(
         codex_home.to_path_buf(),
@@ -407,8 +450,8 @@ fn assert_keyring_saved_auth_and_removed_fallback(
     let saved_value = manager
         .get(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME)?
         .context("encrypted auth entry should exist")?;
-    let expected_serialized = serde_json::to_string(expected)?;
-    assert_eq!(saved_value, expected_serialized);
+    let saved: StoredAuthBank = serde_json::from_str(&saved_value)?;
+    assert_eq!(&saved, expected);
     let old_key = compute_store_key(codex_home)?;
     assert!(
         mock_keyring.saved_value(&old_key).is_none(),
@@ -505,7 +548,7 @@ fn secrets_keyring_auth_storage_load_returns_deserialized_auth() -> anyhow::Resu
     seed_secrets_backend_with_auth(&mock_keyring, codex_home.path(), &expected)?;
 
     let loaded = storage.load()?;
-    assert_eq!(Some(expected), loaded);
+    assert_eq!(Some(StoredAuthBank::from_legacy(expected)), loaded);
     Ok(())
 }
 
@@ -529,7 +572,7 @@ fn direct_keyring_auth_storage_saves_legacy_keyring_entry() -> anyhow::Result<()
     );
     let auth_file = get_auth_file(codex_home.path());
     std::fs::write(&auth_file, "stale")?;
-    let auth = auth_with_prefix("direct");
+    let auth = StoredAuthBank::from_legacy(auth_with_prefix("direct"));
 
     storage.save(&auth)?;
 
@@ -537,7 +580,7 @@ fn direct_keyring_auth_storage_saves_legacy_keyring_entry() -> anyhow::Result<()
     let saved_value = mock_keyring
         .saved_value(&legacy_key)
         .context("direct keyring auth entry should exist")?;
-    assert_eq!(saved_value, serde_json::to_string(&auth)?);
+    assert_eq!(serde_json::from_str::<StoredAuthBank>(&saved_value)?, auth);
     assert!(!encrypted_auth_file(codex_home.path()).exists());
     assert!(
         !auth_file.exists(),
@@ -555,7 +598,7 @@ fn direct_keyring_auth_storage_delete_removes_keyring_and_file() -> anyhow::Resu
         codex_home.path().to_path_buf(),
         Arc::new(mock_keyring.clone()),
     );
-    let auth = auth_with_prefix("direct-delete");
+    let auth = StoredAuthBank::from_legacy(auth_with_prefix("direct-delete"));
     storage.save(&auth)?;
     let auth_file = get_auth_file(codex_home.path());
     std::fs::write(&auth_file, "stale")?;
@@ -630,7 +673,7 @@ fn secrets_keyring_auth_storage_save_persists_and_removes_fallback_file() -> any
         auth_mode: Some(AuthMode::Chatgpt),
         openai_api_key: None,
         tokens: Some(TokenData {
-            id_token: Default::default(),
+            id_token: id_token_with_prefix("account"),
             access_token: "access".to_string(),
             refresh_token: "refresh".to_string(),
             account_id: Some("account".to_string()),
@@ -642,9 +685,10 @@ fn secrets_keyring_auth_storage_save_persists_and_removes_fallback_file() -> any
         bedrock_access_keys: None,
     };
 
-    storage.save(&auth)?;
+    let bank = StoredAuthBank::from_legacy(auth);
+    storage.save(&bank)?;
 
-    assert_keyring_saved_auth_and_removed_fallback(&mock_keyring, codex_home.path(), &auth)?;
+    assert_keyring_saved_auth_and_removed_fallback(&mock_keyring, codex_home.path(), &bank)?;
     Ok(())
 }
 
@@ -682,7 +726,9 @@ fn secrets_keyring_auth_storage_delete_removes_legacy_direct_keyring_entry() -> 
         codex_home.path().to_path_buf(),
         Arc::new(mock_keyring.clone()),
     );
-    direct_storage.save(&auth_with_prefix("legacy-direct"))?;
+    direct_storage.save(&StoredAuthBank::from_legacy(auth_with_prefix(
+        "legacy-direct",
+    )))?;
     let storage = SecretsKeyringAuthStorage::new(
         codex_home.path().to_path_buf(),
         Arc::new(mock_keyring.clone()),
@@ -722,11 +768,11 @@ fn auto_auth_storage_load_prefers_keyring_value() -> anyhow::Result<()> {
     let keyring_auth = auth_with_prefix("keyring");
     seed_secrets_backend_with_auth(&mock_keyring, codex_home.path(), &keyring_auth)?;
 
-    let file_auth = auth_with_prefix("file");
+    let file_auth = StoredAuthBank::from_legacy(auth_with_prefix("file"));
     storage.file_storage.save(&file_auth)?;
 
     let loaded = storage.load()?;
-    assert_eq!(loaded, Some(keyring_auth));
+    assert_eq!(loaded, Some(StoredAuthBank::from_legacy(keyring_auth)));
     Ok(())
 }
 
@@ -740,7 +786,7 @@ fn auto_auth_storage_load_uses_file_when_keyring_empty() -> anyhow::Result<()> {
         AuthKeyringBackendKind::Secrets,
     );
 
-    let expected = auth_with_prefix("file-only");
+    let expected = StoredAuthBank::from_legacy(auth_with_prefix("file-only"));
     storage.file_storage.save(&expected)?;
 
     let loaded = storage.load()?;
@@ -763,7 +809,7 @@ fn auto_auth_storage_load_falls_back_when_keyring_errors() -> anyhow::Result<()>
     seed_secrets_backend_with_auth(&mock_keyring, codex_home.path(), &encrypted)?;
     mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
 
-    let expected = auth_with_prefix("fallback");
+    let expected = StoredAuthBank::from_legacy(auth_with_prefix("fallback"));
     storage.file_storage.save(&expected)?;
 
     let loaded = storage.load()?;
@@ -780,10 +826,10 @@ fn auto_auth_storage_save_prefers_keyring() -> anyhow::Result<()> {
         Arc::new(mock_keyring.clone()),
         AuthKeyringBackendKind::Secrets,
     );
-    let stale = auth_with_prefix("stale");
+    let stale = StoredAuthBank::from_legacy(auth_with_prefix("stale"));
     storage.file_storage.save(&stale)?;
 
-    let expected = auth_with_prefix("to-save");
+    let expected = StoredAuthBank::from_legacy(auth_with_prefix("to-save"));
     storage.save(&expected)?;
 
     assert_keyring_saved_auth_and_removed_fallback(&mock_keyring, codex_home.path(), &expected)?;
@@ -802,7 +848,7 @@ fn auto_auth_storage_save_falls_back_when_keyring_errors() -> anyhow::Result<()>
     let key = compute_keyring_account(codex_home.path());
     mock_keyring.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));
 
-    let auth = auth_with_prefix("fallback");
+    let auth = StoredAuthBank::from_legacy(auth_with_prefix("fallback"));
     storage.save(&auth)?;
 
     let auth_file = get_auth_file(codex_home.path());

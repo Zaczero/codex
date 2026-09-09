@@ -37,7 +37,7 @@ fn request_has_input_type(request: &wiremock::Request, input_type: &str) -> bool
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
+async fn api_key_subagent_shares_the_account_scoped_session_cache_key() -> Result<()> {
     let server = start_mock_server().await;
     let spawn_args = serde_json::to_string(&json!({
         "message": CHILD_TASK,
@@ -122,6 +122,15 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
     .await
     .map_err(|_| anyhow!("timed out waiting for the child request"))?;
     let child_thread_id = child_request.header("thread-id").expect("child thread ID");
+    let cache_key = root_request.body_json()["prompt_cache_key"]
+        .as_str()
+        .expect("root cache key")
+        .to_string();
+    assert_ne!(cache_key, expected_session_id);
+    assert_eq!(
+        child_request.body_json()["prompt_cache_key"],
+        json!(cache_key)
+    );
 
     assert_eq!(
         json!({
@@ -130,13 +139,11 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
                 "sessionId": root_request.header("session-id"),
                 "threadId": &root_thread_id,
                 "clientRequestId": root_request.header("x-client-request-id"),
-                "promptCacheKey": root_request.body_json()["prompt_cache_key"].clone(),
             },
             "child": {
                 "sessionId": child_request.header("session-id"),
                 "threadId": &child_thread_id,
                 "clientRequestId": child_request.header("x-client-request-id"),
-                "promptCacheKey": child_request.body_json()["prompt_cache_key"].clone(),
             },
         }),
         json!({
@@ -145,13 +152,11 @@ async fn api_key_subagent_uses_session_id_as_prompt_cache_key() -> Result<()> {
                 "sessionId": &expected_session_id,
                 "threadId": &root_thread_id,
                 "clientRequestId": &root_thread_id,
-                "promptCacheKey": &expected_session_id,
             },
             "child": {
                 "sessionId": &expected_session_id,
                 "threadId": &child_thread_id,
                 "clientRequestId": &child_thread_id,
-                "promptCacheKey": &expected_session_id,
             },
         })
     );

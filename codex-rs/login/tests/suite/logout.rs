@@ -176,7 +176,7 @@ async fn logout_with_revoke_removes_auth_when_revoke_fails() -> Result<()> {
 
 #[serial_test::serial(auth_env)]
 #[tokio::test]
-async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
+async fn auth_manager_logout_revokes_the_latest_stored_token() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -233,7 +233,7 @@ async fn auth_manager_logout_with_revoke_uses_cached_auth() -> Result<()> {
             .body_json::<Value>()
             .context("revoke request should be JSON")?,
         json!({
-            "token": REFRESH_TOKEN,
+            "token": "newer-disk-refresh-token",
             "token_type_hint": "refresh_token",
             "client_id": CLIENT_ID,
         })

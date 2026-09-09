@@ -6,12 +6,10 @@ use codex_core::config::Config;
 use codex_core::config::TokenBudgetConfig;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_history_notes_extension::install;
-use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use core_test_support::responses;
 use core_test_support::test_codex::test_codex;
-use http::HeaderMap;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use wiremock::Mock;
@@ -56,7 +54,7 @@ async fn history_images_reach_the_next_model_request() -> Result<(), Box<dyn std
         ],
     )
     .await;
-    let auth = CodexAuth::Headers(AuthHeaders::new(HeaderMap::new()));
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     install(
         &mut extensions,

@@ -264,6 +264,7 @@ async fn run_remote_compact_task_inner_impl(
         }
     };
     let RemoteCompactAttempt {
+        account_scope,
         new_history,
         trace_input_history,
     } = attempt;
@@ -287,10 +288,16 @@ async fn run_remote_compact_task_inner_impl(
         });
     }
     // Legacy `/responses/compact` returns provider-normalized items without a stable link to their
-    // original envelopes, so it does not preserve harness metadata. Compaction-trigger/v2 does.
+    // original envelopes. Record the compact response's producer instead of inheriting metadata.
     let new_history = new_history
         .into_iter()
-        .map(ResponseItemEnvelope::new)
+        .map(|item| ResponseItemEnvelope {
+            item,
+            metadata: Some(codex_history::CodexHarnessMetadata {
+                account_scope: account_scope.clone(),
+                ..Default::default()
+            }),
+        })
         .collect();
     sess.replace_compacted_history(
         new_history,

@@ -78,7 +78,7 @@ const GUARDIAN_MAX_ACTION_STRING_TOKENS: usize = 16_000;
 #[derive(Clone)]
 pub(crate) struct GuardianReviewContext {
     /// The response currently handled in this execution context.
-    pub(crate) parent_response_id: Option<String>,
+    pub(crate) parent_response_id: Option<codex_api::ResponseId>,
     turn: Arc<TurnContext>,
     environments: TurnEnvironmentSnapshot,
     // Model and reasoning inputs are carried for the follow-up Guardian and V2 migrations.
@@ -101,7 +101,7 @@ impl GuardianReviewContext {
             parent_response_id: turn
                 .extension_data
                 .get::<codex_api::ResponseId>()
-                .map(|id| id.0.clone()),
+                .map(|id| id.as_ref().clone()),
             environments: turn.environments.clone(),
             model_info: Arc::clone(&settings.model_info),
             reasoning_effort: settings.reasoning_effort().cloned(),
@@ -128,7 +128,7 @@ impl From<&Arc<StepContext>> for GuardianReviewContext {
                 .turn
                 .extension_data
                 .get::<codex_api::ResponseId>()
-                .map(|id| id.0.clone()),
+                .map(|id| id.as_ref().clone()),
             turn: Arc::clone(&step.turn),
             environments: step.environments.clone(),
             model_info: Arc::clone(&step.settings.model_info),
@@ -146,7 +146,7 @@ impl From<Arc<TurnContext>> for GuardianReviewContext {
             parent_response_id: turn
                 .extension_data
                 .get::<codex_api::ResponseId>()
-                .map(|id| id.0.clone()),
+                .map(|id| id.as_ref().clone()),
             environments: turn.environments.clone(),
             model_info: Arc::clone(turn.model_info()),
             reasoning_effort: turn.reasoning_effort().cloned(),

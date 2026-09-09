@@ -1813,6 +1813,7 @@ fn tool_by_name<'a>(
 
 fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> ToolCall<'static> {
     ToolCall {
+        account_scope: None,
         turn_id: "turn-1".to_string(),
         call_id: call_id.to_string(),
         tool_name: codex_extension_api::ToolName::plain(tool_name),

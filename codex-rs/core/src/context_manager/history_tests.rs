@@ -49,6 +49,15 @@ const EXEC_FORMAT_MAX_BYTES: usize = 10_000;
 const EXEC_FORMAT_MAX_TOKENS: usize = 2_500;
 const TEST_WAV_SAMPLE_RATE: u32 = 8_000;
 
+impl ContextManager {
+    pub(crate) fn for_prompt(self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
+        self.for_prompt_annotated(input_modalities)
+            .into_iter()
+            .map(ResponseItemEnvelope::into_item)
+            .collect()
+    }
+}
+
 fn unknown_content_metadata() -> InternalChatMessageMetadataPassthrough {
     InternalChatMessageMetadataPassthrough {
         content_item_kinds: Some(vec![ContentItemKind("unknown".to_string())]),

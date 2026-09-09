@@ -1,5 +1,5 @@
-//! Persist the account-bound return model for a task before automatically entering Reserve.
-//! Task IDs scope the cache across reconnects/resumes without changing global model defaults.
+//! Persist a thread's model preference before automatically entering Reserve.
+//! Recovery requires a fresh usage decision for the current account, even after switching accounts.
 
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -12,7 +12,6 @@ use std::path::PathBuf;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct ReserveReturnModel {
-    pub account_id: String,
     pub model: String,
     pub effort: Option<ReasoningEffort>,
 }

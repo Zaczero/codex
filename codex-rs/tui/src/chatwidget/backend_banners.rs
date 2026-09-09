@@ -79,7 +79,10 @@ impl ChatWidget {
     }
 
     pub(crate) fn backend_banner_fallback(&mut self) -> Option<AutomaticModelSwitch> {
-        if !self.has_chatgpt_account || !self.requires_openai_auth {
+        if !self.has_chatgpt_account
+            || !self.requires_openai_auth
+            || self.backend_banner_state.account_id.is_none()
+        {
             return None;
         }
         if self.current_model() == LUNA_RESERVE_MODEL
@@ -95,11 +98,6 @@ impl ChatWidget {
                                 self.config.codex_home.as_path(),
                                 self.forked_from?,
                             )?;
-                            if self.backend_banner_state.account_id.as_deref()
-                                != Some(previous.account_id.as_str())
-                            {
-                                return None;
-                            }
                             previous
                                 .save(self.config.codex_home.as_path(), thread_id)
                                 .ok()?;
@@ -108,28 +106,11 @@ impl ChatWidget {
                     )
                 });
         }
-        if self
-            .automatic_model_switch_state
-            .reserve_return
-            .as_ref()
-            .is_some_and(|previous| {
-                self.backend_banner_state
-                    .account_id
-                    .as_ref()
-                    .is_some_and(|account_id| account_id != &previous.account_id)
-            })
-        {
-            self.clear_reserve_return();
-        }
         let models = self.model_catalog.try_list_models().ok()?;
         if self.current_model() == LUNA_RESERVE_MODEL
             && self.backend_banner_state.ordinary_usage_recovered
         {
             let previous = self.automatic_model_switch_state.reserve_return.as_ref()?;
-            if self.backend_banner_state.account_id.as_deref() != Some(previous.account_id.as_str())
-            {
-                return None;
-            }
             let model = models
                 .into_iter()
                 .find(|model| model.show_in_picker && model.model == previous.model)?;
@@ -175,16 +156,10 @@ impl ChatWidget {
 
     /// Save the return target before changing server state, including before any turn is sent.
     pub(crate) fn prepare_luna_reserve_return(&mut self) -> bool {
-        let Some((account_id, thread_id)) = self
-            .backend_banner_state
-            .account_id
-            .clone()
-            .zip(self.thread_id())
-        else {
+        let Some(thread_id) = self.thread_id() else {
             return false;
         };
         let previous = ReserveReturnModel {
-            account_id,
             model: self.current_model().to_string(),
             effort: self.current_reasoning_effort(),
         };
@@ -234,14 +209,10 @@ impl ChatWidget {
     /// Commit a successfully applied task setting and keep its recovery notice visible together.
     pub(crate) fn finish_backend_banner_fallback(&mut self, mode: CollaborationMode) {
         let previous_model = self.current_model().to_string();
-        let reserve_return = (mode.model() == LUNA_RESERVE_MODEL)
-            .then(|| self.backend_banner_state.account_id.clone())
-            .flatten()
-            .map(|account_id| ReserveReturnModel {
-                account_id,
-                model: previous_model.clone(),
-                effort: self.current_reasoning_effort(),
-            });
+        let reserve_return = (mode.model() == LUNA_RESERVE_MODEL).then(|| ReserveReturnModel {
+            model: previous_model.clone(),
+            effort: self.current_reasoning_effort(),
+        });
         let involves_reserve =
             mode.model() == LUNA_RESERVE_MODEL || previous_model == LUNA_RESERVE_MODEL;
         self.set_model(mode.model());

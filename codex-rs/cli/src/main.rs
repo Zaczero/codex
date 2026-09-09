@@ -12,6 +12,11 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::read_access_token_from_stdin;
 use codex_cli::read_api_key_from_stdin;
+use codex_cli::run_account_add;
+use codex_cli::run_account_list;
+use codex_cli::run_account_remove;
+use codex_cli::run_account_rename;
+use codex_cli::run_account_switch;
 use codex_cli::run_login_status;
 use codex_cli::run_login_with_access_token;
 use codex_cli::run_login_with_api_key;
@@ -160,6 +165,9 @@ enum Subcommand {
 
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
+
+    /// Manage named credential accounts.
+    Account(AccountCommand),
 
     /// Manage external MCP servers for Codex.
     Mcp(McpCli),
@@ -545,6 +553,65 @@ enum LoginSubcommand {
 struct LogoutCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+}
+
+#[derive(Debug, Parser)]
+struct AccountCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    #[command(subcommand)]
+    action: AccountSubcommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum AccountSubcommand {
+    /// List named accounts without showing credential material.
+    List(AccountListCommand),
+    /// Add a named account through browser or device-code OAuth.
+    Add(AccountAddCommand),
+    /// Rename an account by immutable ID or current label.
+    Rename(AccountRenameCommand),
+    /// Select an account by immutable ID or current label.
+    Switch(AccountSelectorCommand),
+    /// Remove an account by immutable ID or current label.
+    Remove(AccountSelectorCommand),
+}
+
+#[derive(Debug, Parser)]
+struct AccountListCommand {
+    /// Print a stable JSON metadata document.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Parser)]
+struct AccountAddCommand {
+    /// Label assigned to the new account.
+    label: String,
+    /// Use device-code OAuth instead of the browser callback.
+    #[arg(long = "device-auth")]
+    use_device_code: bool,
+    /// EXPERIMENTAL: Use custom OAuth issuer base URL (advanced).
+    #[arg(long = "experimental_issuer", hide = true)]
+    issuer_base_url: Option<String>,
+    /// EXPERIMENTAL: Use custom OAuth client ID (advanced).
+    #[arg(long = "experimental_client-id", hide = true)]
+    client_id: Option<String>,
+}
+
+#[derive(Debug, Parser)]
+struct AccountRenameCommand {
+    /// Immutable account ID or current label.
+    selector: String,
+    /// New non-empty label.
+    label: String,
+}
+
+#[derive(Debug, Parser)]
+struct AccountSelectorCommand {
+    /// Immutable account ID or current label.
+    selector: String,
 }
 
 #[derive(Debug, Parser)]
@@ -1641,6 +1708,46 @@ async fn cli_main(
             );
             run_logout(logout_cli.config_overrides).await;
         }
+        Some(Subcommand::Account(mut account_cli)) => {
+            reject_remote_mode_for_subcommand(
+                root_remote.as_deref(),
+                root_remote_auth_token_env.as_deref(),
+                "account",
+            )?;
+            prepend_config_flags(
+                &mut account_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            match account_cli.action {
+                AccountSubcommand::List(command) => {
+                    run_account_list(account_cli.config_overrides, command.json).await;
+                }
+                AccountSubcommand::Add(command) => {
+                    run_account_add(
+                        account_cli.config_overrides,
+                        command.label,
+                        command.use_device_code,
+                        command.issuer_base_url,
+                        command.client_id,
+                    )
+                    .await;
+                }
+                AccountSubcommand::Rename(command) => {
+                    run_account_rename(
+                        account_cli.config_overrides,
+                        command.selector,
+                        command.label,
+                    )
+                    .await;
+                }
+                AccountSubcommand::Switch(command) => {
+                    run_account_switch(account_cli.config_overrides, command.selector).await;
+                }
+                AccountSubcommand::Remove(command) => {
+                    run_account_remove(account_cli.config_overrides, command.selector).await;
+                }
+            }
+        }
         Some(Subcommand::Completion(completion_cli)) => {
             reject_remote_mode_for_subcommand(
                 root_remote.as_deref(),
@@ -2571,6 +2678,7 @@ fn unsupported_subcommand_name_for_strict_config(
         Some(Subcommand::App(_)) => Some("app"),
         Some(Subcommand::Login(_)) => Some("login"),
         Some(Subcommand::Logout(_)) => Some("logout"),
+        Some(Subcommand::Account(_)) => Some("account"),
         Some(Subcommand::Completion(_)) => Some("completion"),
         Some(Subcommand::Update) => Some("update"),
         Some(Subcommand::Cloud(_)) => Some("cloud"),

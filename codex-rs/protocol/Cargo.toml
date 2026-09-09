@@ -48,7 +48,7 @@ ts-rs = { workspace = true, features = [
     "serde-json-impl",
     "no-serde-warnings",
 ] }
-uuid = { workspace = true, features = ["serde", "v7", "v4"] }
+uuid = { workspace = true, features = ["serde", "v7", "v4", "v5"] }
 wildmatch = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

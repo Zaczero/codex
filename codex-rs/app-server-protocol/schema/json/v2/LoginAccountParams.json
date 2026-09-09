@@ -32,6 +32,13 @@
     },
     {
       "properties": {
+        "accountLabel": {
+          "description": "Insert successful credentials under this local label instead of replacing the active record.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "appBrand": {
           "anyOf": [
             {
@@ -65,6 +72,13 @@
     },
     {
       "properties": {
+        "accountLabel": {
+          "description": "Insert successful credentials under this local label instead of replacing the active record.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "type": {
           "enum": [
             "chatgptDeviceCode"

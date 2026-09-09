@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -136,6 +137,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         forced_chatgpt_workspace_id: Some(vec![chatgpt_account_id.to_string()]),
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        named_account_label: None,
         login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
@@ -177,6 +179,10 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     let auth_path = codex_home.join("auth.json");
     let data = std::fs::read_to_string(&auth_path)?;
     let json: serde_json::Value = serde_json::from_str(&data)?;
+    let selected_id = json["selected_account_id"]
+        .as_str()
+        .context("selected account ID")?;
+    let json = &json["accounts"][selected_id]["auth"];
     // The following assert is here because of the old oauth flow that exchanges tokens for an
     // API key. See obtain_api_key in server.rs for details. Once we remove this old mechanism
     // from the code, this test should be updated to expect that the API key is no longer present.
@@ -213,6 +219,7 @@ async fn hosted_login_redirects_to_configured_open_app_url() -> Result<()> {
             app_brand: LoginSuccessPageBrand::Chatgpt,
         },
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        named_account_label: None,
     })?;
     let login_port = server.actual_port;
     let client = HttpClientBuilder::new()
@@ -262,6 +269,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        named_account_label: None,
         login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
@@ -308,6 +316,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
         ]),
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        named_account_label: None,
         login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
@@ -349,6 +358,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        named_account_label: None,
         login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
@@ -412,6 +422,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        named_account_label: None,
         login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
@@ -483,6 +494,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        named_account_label: None,
         login_success_page: LoginSuccessPage::Local,
     };
     let server = run_login_server(opts)?;
@@ -633,6 +645,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        named_account_label: None,
         login_success_page: LoginSuccessPage::Local,
     };
 
@@ -657,6 +670,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
         auth_keyring_backend_kind: AuthKeyringBackendKind::Direct,
+        named_account_label: None,
         login_success_page: LoginSuccessPage::Local,
     };
 

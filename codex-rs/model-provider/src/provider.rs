@@ -251,18 +251,38 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         })
     }
 
-    /// Returns request credentials, optionally scoped to a Codex session task.
-    fn api_auth_for_scope(
+    /// Resolves routing and scoped credentials from the same first-party account snapshot.
+    fn request_setup(
         &self,
+        auth: Option<CodexAuth>,
         scope: ProviderAuthScope,
-    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedProviderAuth>> {
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ProviderRequestSetup>> {
         Box::pin(async move {
-            if !provider_uses_first_party_auth_path(self.info()) {
-                return self.api_auth().await.map(ResolvedProviderAuth::new);
-            }
-            let auth = self.auth().await;
-            resolve_provider_auth_for_scope(self.auth_manager(), auth.as_ref(), self.info(), scope)
-                .await
+            let (api_provider, resolved_auth) = if provider_uses_first_party_auth_path(self.info())
+            {
+                let mut api_provider = self
+                    .info()
+                    .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+                enforce_managed_residency(&mut api_provider);
+                let resolved_auth = resolve_provider_auth_for_scope(
+                    self.auth_manager(),
+                    auth.as_ref(),
+                    self.info(),
+                    scope,
+                )
+                .await?;
+                (api_provider, resolved_auth)
+            } else {
+                (
+                    self.api_provider().await?,
+                    ResolvedProviderAuth::new(self.api_auth().await?),
+                )
+            };
+            Ok(ProviderRequestSetup {
+                auth,
+                api_provider,
+                resolved_auth,
+            })
         })
     }
 
@@ -307,6 +327,13 @@ pub type ModelProviderFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a
 
 /// Shared runtime model provider handle.
 pub type SharedModelProvider = Arc<dyn ModelProvider>;
+
+/// Request routing and credentials resolved together for one account.
+pub struct ProviderRequestSetup {
+    pub auth: Option<CodexAuth>,
+    pub api_provider: Provider,
+    pub resolved_auth: ResolvedProviderAuth,
+}
 
 fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
     provider.requires_openai_auth
@@ -618,10 +645,10 @@ mod tests {
     }
 
     fn bedrock_api_key_auth() -> CodexAuth {
-        CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-            api_key: "bedrock-api-key-test".to_string(),
-            region: "us-east-1".to_string(),
-        })
+        CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+            "bedrock-api-key-test".to_string(),
+            "us-east-1".to_string(),
+        ))
     }
 
     #[tokio::test]
@@ -632,15 +659,18 @@ mod tests {
         );
 
         let auth = provider
-            .api_auth_for_scope(ProviderAuthScope {
-                agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
-                session_source: SessionSource::Cli,
-                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
-            })
+            .request_setup(
+                provider.auth().await,
+                ProviderAuthScope {
+                    agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
+                    session_source: SessionSource::Cli,
+                    agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
+                },
+            )
             .await
             .expect("auth should resolve");
 
-        assert!(auth.auth.to_auth_headers().is_empty());
+        assert!(auth.resolved_auth.auth.to_auth_headers().is_empty());
     }
 
     #[test]

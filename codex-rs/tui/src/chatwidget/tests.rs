@@ -236,6 +236,9 @@ mod approval_requests;
 mod backend_banners_tests;
 #[path = "tests/bedrock_catalog_tests.rs"]
 mod bedrock_catalog_tests;
+
+#[path = "tests/account_picker_tests.rs"]
+mod account_picker_tests;
 #[path = "tests/collaboration_catalog_tests.rs"]
 mod collaboration_catalog_tests;
 #[path = "tests/compaction_tests.rs"]

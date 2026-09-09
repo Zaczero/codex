@@ -95,8 +95,21 @@ pub struct MemorySummarizeOutput {
 }
 
 /// The server response currently being handled, shared with tool-review extensions.
-#[derive(Clone, Debug)]
-pub struct ResponseId(pub String);
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResponseId {
+    pub value: String,
+    pub account_scope: Option<codex_protocol::auth::AccountScope>,
+}
+
+impl ResponseId {
+    /// A backend response reference is reusable only with its known producing account.
+    pub fn for_account(
+        &self,
+        account: Option<&codex_protocol::auth::AccountScope>,
+    ) -> Option<&str> {
+        (account.is_some() && self.account_scope.as_ref() == account).then_some(self.value.as_str())
+    }
+}
 
 #[derive(Debug)]
 pub enum ResponseEvent {

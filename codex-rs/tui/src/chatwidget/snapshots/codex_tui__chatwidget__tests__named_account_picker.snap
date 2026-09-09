@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/account_picker_tests.rs
+expression: "render_bottom_popup(&chat, 90)"
+---
+  Named accounts
+  Choose the account for subsequent requests
+
+  Filter accounts
+› Personal (current)  personal@example.com · ApiKey
+  Travel              other@example.com · ApiKey
+
+  Press enter to confirm or esc to go back

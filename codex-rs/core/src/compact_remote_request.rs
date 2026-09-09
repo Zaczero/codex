@@ -17,6 +17,7 @@ use codex_rollout_trace::CompactionTraceContext;
 use tracing::info;
 
 pub(super) struct RemoteCompactAttempt {
+    pub(super) account_scope: Option<codex_protocol::auth::AccountScope>,
     pub(super) new_history: Vec<ResponseItem>,
     pub(super) trace_input_history: Option<Vec<ResponseItem>>,
 }
@@ -59,7 +60,7 @@ pub(super) async fn run_remote_compact_attempt(
     let trace_input_history = compaction_trace
         .is_enabled()
         .then(|| history.raw_items().cloned().collect());
-    let prompt_input = history.for_prompt(&turn_context.model_info().input_modalities);
+    let prompt_input = history.for_prompt_annotated(&turn_context.model_info().input_modalities);
     let tool_router = &step_context.tool_router;
     let prompt = Prompt {
         input: prompt_input,
@@ -76,7 +77,7 @@ pub(super) async fn run_remote_compact_attempt(
             CodexResponsesRequestKind::Compaction(compaction_metadata),
         )
         .await;
-    let new_history = sess
+    let response = sess
         .services
         .model_client
         .compact_conversation_history(
@@ -103,7 +104,8 @@ pub(super) async fn run_remote_compact_attempt(
         )
         .await?;
     Ok(RemoteCompactAttempt {
-        new_history,
+        account_scope: response.account_scope,
+        new_history: response.items,
         trace_input_history,
     })
 }

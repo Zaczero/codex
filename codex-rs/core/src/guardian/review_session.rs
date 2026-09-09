@@ -815,7 +815,7 @@ impl GuardianReviewSessionManager {
         params: GuardianReviewSessionParams,
         reuse_key: GuardianReviewSessionReuseKey,
         deadline: tokio::time::Instant,
-        parent_compaction: Option<ResponseItem>,
+        parent_compaction: Option<codex_history::ResponseItemEnvelope>,
         fork_snapshot: Option<GuardianReviewForkSnapshot>,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
         let spawn_cancel_token = self.cancellation_token.child_token();
@@ -878,7 +878,7 @@ async fn spawn_guardian_review_session(
     spawn_config: Config,
     reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: CancellationToken,
-    parent_compaction: Option<ResponseItem>,
+    parent_compaction: Option<codex_history::ResponseItemEnvelope>,
     fork_snapshot: Option<GuardianReviewForkSnapshot>,
 ) -> anyhow::Result<GuardianReviewSession> {
     let (
@@ -895,7 +895,7 @@ async fn spawn_guardian_review_session(
         ),
         None => (
             parent_compaction
-                .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item.into())])),
+                .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item)])),
             0,
             None,
             0,
@@ -1283,13 +1283,14 @@ async fn run_review_on_session(
                 }),
                 ..Default::default()
             })
-            .with_responses_metadata(
-                params
-                    .parent_context
-                    .parent_response_id
-                    .as_ref()
-                    .map(|id| HashMap::from([("parent_response_id".to_owned(), id.clone())])),
-            )
+            .with_responses_metadata(params.parent_context.parent_response_id.as_ref().map(|id| {
+                #[expect(
+                    clippy::expect_used,
+                    reason = "Response identity contains only serializable strings and options"
+                )]
+                let identity = serde_json::to_string(id).expect("response identity serializes");
+                HashMap::from([("parent_response_id".to_owned(), identity)])
+            }))
             .on_start(TurnStartOptions {
                 final_output_json_schema: Some(params.schema.clone()),
                 service_tier: None,

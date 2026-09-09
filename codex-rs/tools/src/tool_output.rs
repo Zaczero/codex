@@ -9,6 +9,10 @@ use crate::ToolPayload;
 
 /// Model-facing output contract returned by executable tool runtimes.
 pub trait ToolOutput: Send {
+    /// Account bound to the backend request producing encrypted output, if known.
+    fn account_scope(&self) -> Option<codex_protocol::auth::AccountScope> {
+        None
+    }
     /// Returns a deliberately lossy diagnostic representation, before telemetry size limits.
     /// Implementations may summarize results or omit media and encrypted content. This is not
     /// the authoritative tool result; an untruncated log does not imply a complete result.
@@ -66,6 +70,10 @@ impl<T> ToolOutput for Box<T>
 where
     T: ToolOutput + ?Sized,
 {
+    fn account_scope(&self) -> Option<codex_protocol::auth::AccountScope> {
+        (**self).account_scope()
+    }
+
     fn log_output(&self) -> String {
         (**self).log_output()
     }

@@ -5,6 +5,43 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AccountRemoveParams": {
+      "properties": {
+        "accountId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountId"
+      ],
+      "type": "object"
+    },
+    "AccountRenameParams": {
+      "properties": {
+        "accountId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountId",
+        "label"
+      ],
+      "type": "object"
+    },
+    "AccountSwitchParams": {
+      "properties": {
+        "accountId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountId"
+      ],
+      "type": "object"
+    },
     "AddCreditsNudgeCreditType": {
       "enum": [
         "credits",
@@ -1782,6 +1819,13 @@
         },
         {
           "properties": {
+            "accountLabel": {
+              "description": "Insert successful credentials under this local label instead of replacing the active record.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "appBrand": {
               "anyOf": [
                 {
@@ -1815,6 +1859,13 @@
         },
         {
           "properties": {
+            "accountLabel": {
+              "description": "Insert successful credentials under this local label instead of replacing the active record.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "chatgptDeviceCode"
@@ -7659,6 +7710,101 @@
         "method"
       ],
       "title": "Account/logoutRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/list"
+          ],
+          "title": "Account/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/rename"
+          ],
+          "title": "Account/renameRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AccountRenameParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Account/renameRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/switch"
+          ],
+          "title": "Account/switchRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AccountSwitchParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Account/switchRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "account/remove"
+          ],
+          "title": "Account/removeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/AccountRemoveParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Account/removeRequest",
       "type": "object"
     },
     {

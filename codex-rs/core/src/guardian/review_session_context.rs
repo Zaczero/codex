@@ -49,7 +49,7 @@ impl ReviewContextPolicy {
         self,
         history: &ContextManager,
         reviewer_compaction_hash: Option<&str>,
-    ) -> anyhow::Result<Option<ResponseItem>> {
+    ) -> anyhow::Result<Option<codex_history::ResponseItemEnvelope>> {
         let strict = self == Self::ThreadOwned;
         if self == Self::Legacy {
             return Ok(None);
@@ -100,6 +100,6 @@ impl ReviewContextPolicy {
                 "parent compaction checkpoint is incompatible with the Guardian review model or its compatibility is unknown"
             );
         }
-        Ok(Some(item.clone()))
+        Ok(Some(envelope.clone()))
     }
 }

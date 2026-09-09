@@ -1,8 +1,15 @@
 // GENERATED CODE! DO NOT MODIFY BY HAND!
 
 export type { Account } from "./Account";
+export type { AccountListResponse } from "./AccountListResponse";
 export type { AccountLoginCompletedNotification } from "./AccountLoginCompletedNotification";
 export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUpdatedNotification";
+export type { AccountRemoveParams } from "./AccountRemoveParams";
+export type { AccountRemoveResponse } from "./AccountRemoveResponse";
+export type { AccountRenameParams } from "./AccountRenameParams";
+export type { AccountRenameResponse } from "./AccountRenameResponse";
+export type { AccountSwitchParams } from "./AccountSwitchParams";
+export type { AccountSwitchResponse } from "./AccountSwitchResponse";
 export type { AccountTokenUsageDailyBucket } from "./AccountTokenUsageDailyBucket";
 export type { AccountTokenUsageSummary } from "./AccountTokenUsageSummary";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
@@ -320,6 +327,7 @@ export type { ModelVerification } from "./ModelVerification";
 export type { ModelVerificationNotification } from "./ModelVerificationNotification";
 export type { ModelsRequirements } from "./ModelsRequirements";
 export type { MultiAgentVersion } from "./MultiAgentVersion";
+export type { NamedAccount } from "./NamedAccount";
 export type { NetworkAccess } from "./NetworkAccess";
 export type { NetworkApprovalContext } from "./NetworkApprovalContext";
 export type { NetworkApprovalProtocol } from "./NetworkApprovalProtocol";

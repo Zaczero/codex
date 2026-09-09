@@ -56,6 +56,7 @@ pub(super) struct ConnectionPool {
 }
 
 pub(super) struct PooledConnection {
+    account_scope: Option<codex_protocol::auth::AccountScope>,
     connection: ResponsesWebsocketConnection,
     endpoint: ResponsesEndpoint,
     // The bridge routes by thread ID, so each socket needs its own identity.
@@ -71,6 +72,7 @@ enum Connection {
 }
 
 pub(super) struct ConnectionLease {
+    pub(super) account_scope: Option<codex_protocol::auth::AccountScope>,
     pub(super) thread_id: String,
     pub(super) endpoint: ResponsesEndpoint,
     connection: Connection,
@@ -177,15 +179,21 @@ impl ConnectionPool {
                 None => break None,
             }
         };
-        let (connection, thread_id, endpoint) = match connection {
+        let (connection, thread_id, endpoint, account_scope) = match connection {
             Some(connection) => {
                 let thread_id = connection.thread_id.clone();
                 let endpoint = connection.endpoint;
-                (Connection::Websocket(connection), thread_id, endpoint)
+                let account_scope = connection.account_scope.clone();
+                (
+                    Connection::Websocket(connection),
+                    thread_id,
+                    endpoint,
+                    account_scope,
+                )
             }
             None => {
                 self.replenish();
-                let (mut provider, auth) = self.client_setup().await?;
+                let (mut provider, auth, account_scope) = self.client_setup().await?;
                 // Sampling owns the retry budget across both transports.
                 provider.retry.max_attempts = 0;
                 let endpoint = self.responses_endpoint().await;
@@ -228,10 +236,12 @@ impl ConnectionPool {
                     Connection::Http(client),
                     ThreadId::new().to_string(),
                     endpoint,
+                    account_scope,
                 )
             }
         };
         Ok(ConnectionLease {
+            account_scope,
             thread_id,
             endpoint,
             connection,
@@ -240,25 +250,34 @@ impl ConnectionPool {
         })
     }
 
-    async fn client_setup(&self) -> Result<(Provider, SharedAuthProvider), LunaSamplerError> {
-        let provider = self
+    async fn client_setup(
+        &self,
+    ) -> Result<
+        (
+            Provider,
+            SharedAuthProvider,
+            Option<codex_protocol::auth::AccountScope>,
+        ),
+        LunaSamplerError,
+    > {
+        let setup = self
             .config
             .provider
-            .api_provider()
+            .request_setup(
+                self.config.provider.auth().await,
+                ProviderAuthScope {
+                    agent_identity_policy: self.config.agent_identity_policy,
+                    session_source: self.config.session_source.clone(),
+                    agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
+                },
+            )
             .await
             .map_err(LunaSamplerError::Provider)?;
-        let auth = self
-            .config
-            .provider
-            .api_auth_for_scope(ProviderAuthScope {
-                agent_identity_policy: self.config.agent_identity_policy,
-                session_source: self.config.session_source.clone(),
-                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
-            })
-            .await
-            .map_err(LunaSamplerError::Provider)?
-            .auth;
-        Ok((provider, auth))
+        Ok((
+            setup.api_provider,
+            setup.resolved_auth.auth,
+            setup.auth.as_ref().and_then(CodexAuth::account_scope),
+        ))
     }
 
     fn headers(&self, thread_id: &str) -> Result<HeaderMap, LunaSamplerError> {
@@ -316,7 +335,7 @@ impl ConnectionPool {
     ) -> Result<PooledConnection, LunaSamplerError> {
         let auth_manager = self.config.provider.auth_manager();
         let auth_changes = auth_manager.map(|manager| manager.auth_change_receiver());
-        let (provider, auth) = self.client_setup().await?;
+        let (provider, auth, account_scope) = self.client_setup().await?;
         let thread_id = ThreadId::new().to_string();
         let mut headers = self.headers(&thread_id)?;
         headers.insert(
@@ -362,6 +381,7 @@ impl ConnectionPool {
         }
 
         Ok(PooledConnection {
+            account_scope,
             connection,
             endpoint,
             thread_id,

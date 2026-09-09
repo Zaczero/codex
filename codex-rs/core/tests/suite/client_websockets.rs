@@ -283,7 +283,9 @@ async fn responses_websocket_omits_routing_hint_for_provider_with_own_credential
         /*runtime_metrics_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*enabled_features*/ &[],
-        Some(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        Some(codex_core::test_support::auth_manager_from_auth(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
     )
     .await;
     let mut client_session = harness.client.new_session();
@@ -346,7 +348,8 @@ async fn responses_websocket_omits_unprefixed_item_ids_without_mutating_prompt()
     assert_eq!(body["input"][1].get("id"), None);
     assert_eq!(body["input"][2].get("id"), None);
     assert_eq!(
-        serde_json::to_value(&prompt.input).expect("prompt input should serialize")[1]["id"]
+        serde_json::to_value(raw_prompt_input(&prompt.input))
+            .expect("prompt input should serialize")[1]["id"]
             .as_str(),
         Some("018f9e15-7a6a-7000-8000-000000000001")
     );
@@ -1121,7 +1124,7 @@ async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets()
     assert_eq!(prewarm["type"].as_str(), Some("response.create"));
     assert_eq!(
         prewarm["input"],
-        serde_json::to_value(&prompt.input).unwrap()
+        serde_json::to_value(raw_prompt_input(&prompt.input)).unwrap()
     );
 
     server.shutdown().await;
@@ -1214,7 +1217,7 @@ async fn responses_websocket_v2_requests_use_v2_when_provider_supports_websocket
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input[2..]).unwrap()
+        serde_json::to_value(raw_prompt_input(&prompt_two.input[2..])).unwrap()
     );
 
     let handshake = server.single_handshake();
@@ -1226,6 +1229,106 @@ async fn responses_websocket_v2_requests_use_v2_when_provider_supports_websocket
             .split(',')
             .map(str::trim)
             .any(|value| value == WS_V2_BETA_HEADER_VALUE)
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_switches_accounts_without_reusing_previous_response() {
+    let server = start_websocket_server(vec![
+        vec![vec![ev_response_created("resp-a"), ev_completed("resp-a")]],
+        vec![vec![ev_response_created("resp-b"), ev_completed("resp-b")]],
+    ])
+    .await;
+    let home = TempDir::new().unwrap();
+    let mut auth_config = load_default_config_for_test(&home).await.auth_config();
+    auth_config.auth_credentials_store_mode = codex_config::types::AuthCredentialsStoreMode::File;
+    for (label, key) in [("second", "key-b"), ("first", "key-a")] {
+        codex_login::auth::save_named_account(
+            home.path(),
+            label,
+            &serde_json::from_value(
+                serde_json::json!({"auth_mode": "apikey", "OPENAI_API_KEY": key}),
+            )
+            .unwrap(),
+            auth_config.auth_credentials_store_mode,
+            auth_config.keyring_backend_kind,
+        )
+        .unwrap();
+    }
+    let manager = codex_login::AuthManager::shared_from_auth_config(
+        auth_config.clone(),
+        /*enable_codex_api_key_env*/ false,
+    )
+    .await
+    .unwrap();
+    let account_scope = manager.auth().await.unwrap().account_scope();
+    let mut provider = websocket_provider(&server);
+    provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
+    provider.requires_openai_auth = true;
+    let harness = websocket_harness_with_provider_options_and_auth(
+        provider,
+        /*runtime_metrics_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
+        Some(manager),
+    )
+    .await;
+    let mut session = harness.client.new_session();
+    session
+        .preconnect_websocket(
+            &harness.model_info,
+            &harness.session_telemetry,
+            &websocket_connection_metadata(&harness),
+        )
+        .await
+        .unwrap();
+    let mut first = prompt_with_input(vec![message_item("first")]);
+    first.input.push(codex_history::ResponseItemEnvelope {
+        item: serde_json::from_value(
+            json!({"type":"compaction","encrypted_content":"opaque-account-a"}),
+        )
+        .unwrap(),
+        metadata: Some(codex_history::CodexHarnessMetadata {
+            account_scope,
+            ..Default::default()
+        }),
+    });
+    stream_until_complete(&mut session, &harness, &first).await;
+    assert_eq!(server.handshakes().len(), 1);
+    auth_config.switch_named_account("second").unwrap();
+    let mut second = first.clone();
+    second.input.push(message_item("second").into());
+    stream_until_complete(&mut session, &harness, &second).await;
+    let handshakes = server.handshakes();
+    assert_eq!(
+        handshakes
+            .iter()
+            .map(|request| request.header("authorization"))
+            .collect::<Vec<_>>(),
+        vec![
+            Some("Bearer key-a".to_string()),
+            Some("Bearer key-b".to_string())
+        ]
+    );
+    let connections = server.connections();
+    assert_eq!(connections.len(), 2);
+    let original_request = connections[0][0].body_json();
+    let request = connections[1][0].body_json();
+    assert!(
+        original_request["input"]
+            .to_string()
+            .contains("opaque-account-a")
+    );
+    assert!(!request["input"].to_string().contains("opaque-account-a"));
+    assert_ne!(
+        original_request["prompt_cache_key"],
+        request["prompt_cache_key"]
+    );
+    assert_eq!(request.get("previous_response_id"), None);
+    assert_eq!(
+        request["input"],
+        serde_json::to_value(vec![message_item("first"), message_item("second")]).unwrap()
     );
     server.shutdown().await;
 }
@@ -1315,7 +1418,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input[2..]).unwrap()
+        serde_json::to_value(raw_prompt_input(&prompt_two.input[2..])).unwrap()
     );
 
     // validate third turn
@@ -1324,7 +1427,7 @@ async fn responses_websocket_v2_incremental_requests_are_reused_across_turns() {
     assert_eq!(third["previous_response_id"].as_str(), Some("resp-2"));
     assert_eq!(
         third["input"],
-        serde_json::to_value(&prompt_three.input[4..]).unwrap()
+        serde_json::to_value(raw_prompt_input(&prompt_three.input[4..])).unwrap()
     );
 
     server.shutdown().await;
@@ -1363,7 +1466,7 @@ async fn responses_websocket_v2_wins_when_both_features_enabled() {
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input[2..]).unwrap()
+        serde_json::to_value(raw_prompt_input(&prompt_two.input[2..])).unwrap()
     );
 
     let handshake = server.single_handshake();
@@ -1877,7 +1980,8 @@ async fn responses_websocket_uses_incremental_create_on_prefix() {
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental items")
+        serde_json::to_value(raw_prompt_input(&prompt_two.input[2..]))
+            .expect("serialize incremental items")
     );
 
     server.shutdown().await;
@@ -1936,7 +2040,8 @@ async fn responses_lite_websocket_uses_incremental_create_on_prefix() {
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental items")
+        serde_json::to_value(raw_prompt_input(&prompt_two.input[2..]))
+            .expect("serialize incremental items")
     );
 
     server.shutdown().await;
@@ -2110,7 +2215,8 @@ async fn responses_websocket_uses_previous_response_id_when_prefix_after_complet
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input[2..]).expect("serialize incremental input")
+        serde_json::to_value(raw_prompt_input(&prompt_two.input[2..]))
+            .expect("serialize incremental input")
     );
 
     server.shutdown().await;
@@ -2143,7 +2249,7 @@ async fn responses_websocket_creates_on_non_prefix() {
     assert_eq!(second["stream"], serde_json::Value::Bool(true));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input).unwrap()
+        serde_json::to_value(raw_prompt_input(&prompt_two.input)).unwrap()
     );
 
     server.shutdown().await;
@@ -2179,7 +2285,7 @@ async fn responses_websocket_creates_when_non_input_request_fields_change() {
     assert_eq!(second.get("previous_response_id"), None);
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input).expect("serialize full input")
+        serde_json::to_value(raw_prompt_input(&prompt_two.input)).expect("serialize full input")
     );
 
     server.shutdown().await;
@@ -2221,7 +2327,7 @@ async fn responses_websocket_v2_creates_with_previous_response_id_on_prefix() {
     assert_eq!(second["previous_response_id"].as_str(), Some("resp-1"));
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input[2..]).unwrap()
+        serde_json::to_value(raw_prompt_input(&prompt_two.input[2..])).unwrap()
     );
 
     server.shutdown().await;
@@ -2258,7 +2364,7 @@ async fn responses_websocket_v2_creates_without_previous_response_id_when_non_in
     assert_eq!(second.get("previous_response_id"), None);
     assert_eq!(
         second["input"],
-        serde_json::to_value(&prompt_two.input).expect("serialize full input")
+        serde_json::to_value(raw_prompt_input(&prompt_two.input)).expect("serialize full input")
     );
 
     server.shutdown().await;
@@ -2350,7 +2456,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
     assert_eq!(third.get("previous_response_id"), None);
     assert_eq!(
         third["input"],
-        serde_json::to_value(&prompt_three.input).unwrap()
+        serde_json::to_value(raw_prompt_input(&prompt_three.input)).unwrap()
     );
 
     server.shutdown().await;
@@ -2468,8 +2574,12 @@ fn assistant_message_item(id: &str, text: &str) -> ResponseItem {
 
 fn prompt_with_input(input: Vec<ResponseItem>) -> Prompt {
     let mut prompt = Prompt::default();
-    prompt.input = input;
+    prompt.input = input.into_iter().map(Into::into).collect();
     prompt
+}
+
+fn raw_prompt_input(input: &[codex_history::ResponseItemEnvelope]) -> Vec<&ResponseItem> {
+    input.iter().map(|envelope| &envelope.item).collect()
 }
 
 fn prompt_with_input_and_instructions(input: Vec<ResponseItem>, instructions: &str) -> Prompt {
@@ -2522,7 +2632,9 @@ async fn websocket_harness_for_codex_backend(server: &WebSocketTestServer) -> We
         /*runtime_metrics_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*enabled_features*/ &[],
-        Some(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        Some(codex_core::test_support::auth_manager_from_auth(
+            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        )),
     )
     .await
 }
@@ -2575,7 +2687,7 @@ async fn websocket_harness_with_provider_options_and_auth(
     runtime_metrics_enabled: bool,
     concurrent_reasoning_summaries_enabled: bool,
     enabled_features: &[Feature],
-    auth: Option<CodexAuth>,
+    auth: Option<Arc<codex_login::AuthManager>>,
 ) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
@@ -2605,7 +2717,7 @@ async fn websocket_harness_with_provider_options_and_auth(
     let model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);
     let thread_id = ThreadId::new();
     let session_id = SessionId::new();
-    let client_auth_manager = auth.map(codex_core::test_support::auth_manager_from_auth);
+    let client_auth_manager = auth;
     let auth_manager = client_auth_manager.clone().unwrap_or_else(|| {
         codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"))
     });

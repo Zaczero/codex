@@ -943,6 +943,7 @@ impl AuthModeWidget {
                         app_brand: None,
                         codex_streamlined_login: false,
                         use_hosted_login_success_page: false,
+                        account_label: None,
                     },
                 })
                 .await

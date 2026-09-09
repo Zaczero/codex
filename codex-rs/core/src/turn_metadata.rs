@@ -397,7 +397,9 @@ impl TurnMetadataState {
         // Ordinary app-server client metadata stays in `extra`.
         let parent_response_id =
             if self.subagent_header.as_deref() == Some(crate::guardian::GUARDIAN_REVIEWER_NAME) {
-                extra.remove("parent_response_id")
+                extra
+                    .remove("parent_response_id")
+                    .and_then(|value| serde_json::from_str(&value).ok())
             } else {
                 None
             };

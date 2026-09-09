@@ -1692,6 +1692,16 @@ impl MessageProcessor {
                     .logout_account(request_id.clone())
                     .await
             }
+            ClientRequest::AccountList { .. } => self.account_processor.list_named_accounts().await,
+            ClientRequest::AccountRename { params, .. } => {
+                self.account_processor.rename_named_account(params).await
+            }
+            ClientRequest::AccountSwitch { params, .. } => {
+                self.account_processor.switch_named_account(params).await
+            }
+            ClientRequest::AccountRemove { params, .. } => {
+                self.account_processor.remove_named_account(params).await
+            }
             ClientRequest::CancelLoginAccount { params, .. } => {
                 self.account_processor.cancel_login_account(params).await
             }

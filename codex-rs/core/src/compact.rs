@@ -281,7 +281,7 @@ async fn run_compact_task_inner_impl(
         // Clone is required because of the loop
         let turn_input = history
             .clone()
-            .for_prompt(&turn_context.model_info().input_modalities);
+            .for_prompt_annotated(&turn_context.model_info().input_modalities);
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,
@@ -794,8 +794,12 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
-                    .await;
+                sess.record_account_response_item(
+                    turn_context,
+                    &item,
+                    stream.account_scope.as_ref(),
+                )
+                .await;
             }
             Ok(ResponseEvent::ServerReasoningIncluded(included)) => {
                 sess.set_server_reasoning_included(included).await;

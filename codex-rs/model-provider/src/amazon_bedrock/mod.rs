@@ -481,10 +481,10 @@ mod tests {
 
     #[tokio::test]
     async fn configured_profile_takes_precedence_over_managed_auth() {
-        let managed_auth = BedrockApiKeyAuth {
-            api_key: "managed-bedrock-api-key".to_string(),
-            region: "us-east-1".to_string(),
-        };
+        let managed_auth = BedrockApiKeyAuth::new(
+            "managed-bedrock-api-key".to_string(),
+            "us-east-1".to_string(),
+        );
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::BedrockApiKey(managed_auth.clone()));
         let aws = ModelProviderAwsAuthInfo {
@@ -649,10 +649,10 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_managed_auth_resolves_runtime_endpoint() {
-        let managed_auth = BedrockApiKeyAuth {
-            api_key: "managed-bedrock-api-key".to_string(),
-            region: "eu-west-1".to_string(),
-        };
+        let managed_auth = BedrockApiKeyAuth::new(
+            "managed-bedrock-api-key".to_string(),
+            "eu-west-1".to_string(),
+        );
         let auth_manager =
             AuthManager::from_auth_for_testing(CodexAuth::BedrockApiKey(managed_auth));
         let provider = AmazonBedrockModelProvider::new(

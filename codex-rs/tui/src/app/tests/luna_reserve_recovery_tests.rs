@@ -349,32 +349,151 @@ async fn luna_reserve_recovery_requires_permission_and_no_remaining_blocker() ->
 }
 
 #[tokio::test]
-async fn luna_reserve_recovery_does_not_override_manual_choice_or_account_change() -> Result<()> {
-    for change_account in [false, true] {
-        let (mut app, _events, _ops) = make_test_app_with_channels().await;
+async fn luna_reserve_recovery_does_not_override_manual_choice() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let (mut server, requests, proxy) =
+        backend_banner_fallback_tests::start_fallback_thread(&mut app).await?;
+    configure_reserve_catalog(&mut app);
+    app.chat_widget.update_backend_banner(&reserve_response());
+    app.apply_backend_banner_fallback(&mut server).await;
+    requests.lock().unwrap().clear();
+    let mut recovered = reserve_response();
+    recovered.ordinary_usage_allowed = Some(true);
+    recovered.rate_limit_upsell = None;
+    app.chat_widget.set_model("gpt-5.2");
+    recovered.account_id = Some("workspace-b".into());
+    app.chat_widget.update_backend_banner(&recovered);
+    app.apply_backend_banner_fallback(&mut server).await;
+    recovered.account_id = Some("workspace-a".into());
+    app.chat_widget.update_backend_banner(&recovered);
+    app.apply_backend_banner_fallback(&mut server).await;
+    assert_eq!(app.chat_widget.current_model(), "gpt-5.2");
+    assert!(requests.lock().unwrap().is_empty());
+    server.shutdown().await?;
+    proxy.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn luna_reserve_account_switch_recovers_after_current_account_usage_read() -> Result<()> {
+    for reconstruct in [false, true] {
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
         let (mut server, requests, proxy) =
             backend_banner_fallback_tests::start_fallback_thread(&mut app).await?;
         configure_reserve_catalog(&mut app);
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::High));
+        let original_mode = app.chat_widget.effective_collaboration_mode();
         app.chat_widget.update_backend_banner(&reserve_response());
         app.apply_backend_banner_fallback(&mut server).await;
+        assert_eq!(app.chat_widget.current_model(), "gpt-reserve");
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        if reconstruct {
+            let mut resumed = app.primary_session_configured.clone().unwrap();
+            resumed.model = "gpt-reserve".into();
+            resumed.collaboration_mode =
+                Some(Box::new(app.chat_widget.effective_collaboration_mode()));
+            let mut init = app.chatwidget_init_for_forked_or_resumed_thread(
+                &mut tui,
+                app.config.clone(),
+                /*initial_user_message*/ None,
+            );
+            init.has_chatgpt_account = true;
+            init.has_codex_backend_auth = true;
+            app.replace_chat_widget(ChatWidget::new_with_app_event(init));
+            app.chat_widget.handle_thread_session(resumed);
+        }
+        app.chat_widget
+            .set_feature_enabled(Feature::FastMode, /*enabled*/ false);
+        let previous_generation = app.rate_limit_hard_stop_generation;
+        app.handle_app_server_event(
+            &server,
+            codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
+                ServerNotification::AccountUpdated(
+                    codex_app_server_protocol::AccountUpdatedNotification {
+                        auth_mode: Some(codex_app_server_protocol::AuthMode::Chatgpt),
+                        plan_type: None,
+                    },
+                ),
+            )),
+        )
+        .await;
+        super::daybreak_tests::wait_for_notice(&app.chat_widget.cyber_policy_notice).await;
         requests.lock().unwrap().clear();
+        while events.try_recv().is_ok() {}
+        let generation = app.rate_limit_hard_stop_generation;
         let mut recovered = reserve_response();
         recovered.ordinary_usage_allowed = Some(true);
         recovered.rate_limit_upsell = None;
-        let expected = if change_account {
-            recovered.account_id = Some("workspace-b".into());
-            "gpt-reserve"
-        } else {
-            app.chat_widget.set_model("gpt-5.2");
-            "gpt-5.2"
-        };
-        app.chat_widget.update_backend_banner(&recovered);
-        app.apply_backend_banner_fallback(&mut server).await;
-        recovered.account_id = Some("workspace-a".into());
-        app.chat_widget.update_backend_banner(&recovered);
-        app.apply_backend_banner_fallback(&mut server).await;
-        assert_eq!(app.chat_widget.current_model(), expected);
-        assert!(requests.lock().unwrap().is_empty());
+        // The old account's successful read, unknown identity, and the new account's
+        // exhausted allowance must not restore a model or discard the saved preference.
+        for (request_id, response_generation, account_id, allowed, expected) in [
+            (
+                1,
+                previous_generation,
+                Some("workspace-a"),
+                Some(true),
+                "gpt-reserve",
+            ),
+            (2, generation, None, Some(true), "gpt-reserve"),
+            (3, generation, Some("workspace-b"), None, "gpt-reserve"),
+            (
+                4,
+                generation,
+                Some("workspace-b"),
+                Some(false),
+                "gpt-reserve",
+            ),
+            (5, generation, Some("workspace-b"), Some(true), "gpt-5.4"),
+        ] {
+            recovered.account_id = account_id.map(str::to_owned);
+            recovered.ordinary_usage_allowed = allowed;
+            app.handle_event(
+                &mut tui,
+                &mut server,
+                AppEvent::RateLimitsLoaded {
+                    request_id,
+                    origin: RateLimitRefreshOrigin::Periodic,
+                    hard_stop_generation: response_generation,
+                    result: Ok(recovered.clone()),
+                },
+            )
+            .await?;
+            assert_eq!(app.chat_widget.current_model(), expected);
+        }
+        assert_eq!(
+            app.chat_widget.effective_collaboration_mode(),
+            original_mode
+        );
+        let sent = requests.lock().unwrap().clone();
+        let settings: Vec<_> = sent
+            .iter()
+            .filter(|request| request.method == "thread/settings/update")
+            .map(|request| {
+                serde_json::from_value::<ThreadSettingsUpdateParams>(
+                    request.params.clone().unwrap(),
+                )
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        assert_eq!(
+            settings,
+            vec![ThreadSettingsUpdateParams {
+                thread_id: app.active_thread_id.unwrap().to_string(),
+                model: Some("gpt-5.4".into()),
+                effort: Some(ReasoningEffortConfig::High),
+                collaboration_mode: Some(original_mode),
+                ..Default::default()
+            }]
+        );
+        let notice = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|event| match event {
+                AppEvent::InsertHistoryCell(cell) => {
+                    Some(lines_to_single_string(&cell.display_lines(/*width*/ 100)))
+                }
+                _ => None,
+            })
+            .expect("account-switch recovery notice");
+        insta::assert_snapshot!("luna_reserve_account_switch_recovery_notice", notice);
         server.shutdown().await?;
         proxy.await??;
     }

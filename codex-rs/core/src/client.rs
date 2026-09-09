@@ -300,6 +300,7 @@ struct LastResponse {
 
 #[derive(Debug, Default)]
 struct WebsocketSession {
+    owner_auth: Option<CodexAuth>,
     connection: Option<ApiWebSocketConnection>,
     endpoint: Option<ResponsesEndpoint>,
     last_request: Option<ResponsesApiRequest>,
@@ -586,9 +587,12 @@ impl ModelClient {
         session_telemetry: &SessionTelemetry,
         compaction_trace: &CompactionTraceContext,
         responses_metadata: &CodexResponsesMetadata,
-    ) -> Result<Vec<ResponseItem>> {
+    ) -> Result<crate::client_common::CompactedResponse> {
         if prompt.input.is_empty() {
-            return Ok(Vec::new());
+            return Ok(crate::client_common::CompactedResponse {
+                items: Vec::new(),
+                account_scope: None,
+            });
         }
         let client_setup = self.current_client_setup().await?;
         let transport =
@@ -611,6 +615,11 @@ impl ModelClient {
             settings.summary,
             settings.service_tier,
             responses_metadata,
+            client_setup
+                .auth
+                .as_ref()
+                .and_then(CodexAuth::account_scope)
+                .as_ref(),
         )?;
         let ResponsesApiRequest {
             model,
@@ -684,7 +693,13 @@ impl ModelClient {
             .await
             .map_err(|error| self.state.provider.map_api_error(error));
         trace_attempt.record_result(result.as_deref());
-        result
+        result.map(|items| crate::client_common::CompactedResponse {
+            items,
+            account_scope: client_setup
+                .auth
+                .as_ref()
+                .and_then(CodexAuth::account_scope),
+        })
     }
 
     pub(crate) async fn create_realtime_call_with_headers(
@@ -888,6 +903,10 @@ impl ModelClient {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Request-bound account provenance must accompany the existing request settings"
+    )]
     fn build_responses_request(
         &self,
         prompt: &Prompt,
@@ -896,8 +915,10 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
+        account_scope: Option<&codex_protocol::auth::AccountScope>,
     ) -> Result<ResponsesApiRequest> {
-        let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
+        let mut input =
+            prompt.get_formatted_input_for_request(model_info.use_responses_lite, account_scope);
         let is_openai = self.state.provider.info().is_openai();
         let (instructions, tools) = if model_info.use_responses_lite {
             // These prompt-only items are rebuilt on every request. Hash their visible payloads
@@ -973,7 +994,10 @@ impl ModelClient {
             &prompt.output_schema,
             prompt.output_schema_strict,
         );
-        let prompt_cache_key = Some(self.prompt_cache_key(responses_metadata));
+        let prompt_cache_key = Some(codex_protocol::auth::account_scoped_cache_key(
+            account_scope,
+            &self.prompt_cache_key(responses_metadata),
+        ));
         let service_tier = model_info.service_tier_for_request(service_tier);
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
@@ -1025,22 +1049,31 @@ impl ModelClient {
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
-        let auth = self.state.provider.auth().await;
-        let api_provider = self.state.provider.api_provider().await?;
-        let resolved_auth = self
+        self.client_setup_for_auth(self.state.provider.auth().await)
+            .await
+    }
+
+    async fn client_setup_for_auth(&self, auth: Option<CodexAuth>) -> Result<CurrentClientSetup> {
+        let setup = self
             .state
             .provider
-            .api_auth_for_scope(ProviderAuthScope {
-                agent_identity_policy: self.agent_identity_policy,
-                session_source: self.state.session_source.clone(),
-                agent_identity_session_fallback: self.state.agent_identity_session_fallback.clone(),
-            })
+            .request_setup(
+                auth,
+                ProviderAuthScope {
+                    agent_identity_policy: self.agent_identity_policy,
+                    session_source: self.state.session_source.clone(),
+                    agent_identity_session_fallback: self
+                        .state
+                        .agent_identity_session_fallback
+                        .clone(),
+                },
+            )
             .await?;
         Ok(CurrentClientSetup {
-            auth,
-            api_provider,
-            api_auth: resolved_auth.auth,
-            agent_identity_telemetry: resolved_auth.agent_identity_telemetry,
+            auth: setup.auth,
+            api_provider: setup.api_provider,
+            api_auth: setup.resolved_auth.auth,
+            agent_identity_telemetry: setup.resolved_auth.agent_identity_telemetry,
         })
     }
 
@@ -1071,7 +1104,7 @@ impl ModelClient {
     fn set_guardian_metadata(
         &self,
         metadata: &mut Option<HashMap<String, String>>,
-        parent_response_id: Option<&str>,
+        parent_response_id: Option<&codex_api::ResponseId>,
         auth: Option<&CodexAuth>,
         endpoint: ResponsesEndpoint,
     ) {
@@ -1081,6 +1114,7 @@ impl ModelClient {
         }
         if endpoint == ResponsesEndpoint::Guardian
             && let Some(parent_response_id) = parent_response_id
+                .and_then(|id| id.for_account(auth.and_then(CodexAuth::account_scope).as_ref()))
         {
             metadata.get_or_insert_with(HashMap::new).insert(
                 "parent_response_id".to_owned(),
@@ -1410,6 +1444,19 @@ impl ModelClientSession {
         )
     }
 
+    fn bind_request_auth(&mut self, auth: Option<&CodexAuth>) {
+        let same_account = match (self.websocket_session.owner_auth.as_ref(), auth) {
+            (Some(previous), Some(current)) => previous.same_account_as(current),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_account {
+            self.websocket_session = WebsocketSession::default();
+            self.turn_state = Arc::new(OnceLock::new());
+        }
+        self.websocket_session.owner_auth = auth.cloned();
+    }
+
     /// Opportunistically preconnects a websocket for this turn-scoped client session.
     ///
     /// This performs only connection setup; it never sends prompt payloads.
@@ -1422,15 +1469,15 @@ impl ModelClientSession {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
-        if self.websocket_session.connection.is_some() {
-            return Ok(());
-        }
-
         let client_setup = self.client.current_client_setup().await.map_err(|err| {
             ApiError::Stream(format!(
                 "failed to build websocket prewarm client setup: {err}"
             ))
         })?;
+        self.bind_request_auth(client_setup.auth.as_ref());
+        if self.websocket_session.connection.is_some() {
+            return Ok(());
+        }
         let auth_context = AuthRequestTelemetryContext::new(
             client_setup.auth.as_ref().map(CodexAuth::auth_mode),
             client_setup.api_auth.as_ref(),
@@ -1560,7 +1607,7 @@ impl ModelClientSession {
         )
     )]
     async fn stream_responses_api(
-        &self,
+        &mut self,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1571,13 +1618,24 @@ impl ModelClientSession {
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
+        let request_auth = self.client.state.provider.auth().await;
         let mut auth_recovery = auth_manager
             .as_ref()
-            .map(AuthManager::unauthorized_recovery);
+            .map(|manager| manager.unauthorized_recovery_for_request(request_auth.clone()));
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self.client.current_client_setup().await?;
+            let client_setup = if auth_manager
+                .as_ref()
+                .is_some_and(|manager| manager.has_external_auth())
+            {
+                self.client.current_client_setup().await?
+            } else {
+                self.client
+                    .client_setup_for_auth(request_auth.clone())
+                    .await?
+            };
+            self.bind_request_auth(client_setup.auth.as_ref());
             let endpoint = self
                 .client
                 .responses_endpoint(client_setup.auth.as_ref(), &model_info.slug);
@@ -1613,10 +1671,15 @@ impl ModelClientSession {
                 summary,
                 service_tier.clone(),
                 responses_metadata,
+                client_setup
+                    .auth
+                    .as_ref()
+                    .and_then(CodexAuth::account_scope)
+                    .as_ref(),
             )?;
             self.client.set_guardian_metadata(
                 &mut request.client_metadata,
-                responses_metadata.parent_response_id.as_deref(),
+                responses_metadata.parent_response_id.as_ref(),
                 client_setup.auth.as_ref(),
                 endpoint,
             );
@@ -1661,6 +1724,10 @@ impl ModelClientSession {
                         request_session_telemetry,
                         inference_trace_attempt,
                         Arc::clone(&self.client.state.provider),
+                        client_setup
+                            .auth
+                            .as_ref()
+                            .and_then(CodexAuth::account_scope),
                     );
                     return Ok(stream);
                 }
@@ -1738,13 +1805,24 @@ impl ModelClientSession {
         let provider = Arc::clone(&self.client.state.provider);
         let auth_manager = provider.auth_manager();
 
+        let request_auth = provider.auth().await;
         let mut auth_recovery = auth_manager
             .as_ref()
-            .map(AuthManager::unauthorized_recovery);
+            .map(|manager| manager.unauthorized_recovery_for_request(request_auth.clone()));
         let mut provider_auth_recovery_attempted = false;
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
-            let client_setup = self.client.current_client_setup().await?;
+            let client_setup = if auth_manager
+                .as_ref()
+                .is_some_and(|manager| manager.has_external_auth())
+            {
+                self.client.current_client_setup().await?
+            } else {
+                self.client
+                    .client_setup_for_auth(request_auth.clone())
+                    .await?
+            };
+            self.bind_request_auth(client_setup.auth.as_ref());
             let endpoint = self
                 .client
                 .responses_endpoint(client_setup.auth.as_ref(), &model_info.slug);
@@ -1762,6 +1840,11 @@ impl ModelClientSession {
                 summary,
                 service_tier.clone(),
                 responses_metadata,
+                client_setup
+                    .auth
+                    .as_ref()
+                    .and_then(CodexAuth::account_scope)
+                    .as_ref(),
             )?;
             if endpoint == ResponsesEndpoint::Guardian {
                 request.service_tier = None;
@@ -1876,7 +1959,7 @@ impl ModelClientSession {
             };
             self.client.set_guardian_metadata(
                 &mut ws_payload.client_metadata,
-                responses_metadata.parent_response_id.as_deref(),
+                responses_metadata.parent_response_id.as_ref(),
                 client_setup.auth.as_ref(),
                 endpoint,
             );
@@ -1921,6 +2004,10 @@ impl ModelClientSession {
                 request_session_telemetry,
                 inference_trace_attempt,
                 Arc::clone(&self.client.state.provider),
+                client_setup
+                    .auth
+                    .as_ref()
+                    .and_then(CodexAuth::account_scope),
             );
             self.websocket_session.last_response_rx = Some(last_request_rx);
             return Ok(WebsocketStreamOutcome::Stream(stream));
@@ -2154,6 +2241,7 @@ fn map_response_stream(
     session_telemetry: SessionTelemetry,
     inference_trace_attempt: InferenceTraceAttempt,
     provider: SharedModelProvider,
+    account_scope: Option<codex_protocol::auth::AccountScope>,
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let codex_api::ResponseStream {
         rx_event,
@@ -2163,13 +2251,15 @@ fn map_response_stream(
         rx_event,
         upstream_request_id: None,
     };
-    map_response_events(
+    let (mut stream, last_response) = map_response_events(
         upstream_request_id,
         api_stream,
         session_telemetry,
         inference_trace_attempt,
         provider,
-    )
+    );
+    stream.account_scope = account_scope;
+    (stream, last_response)
 }
 
 fn map_response_events<S>(
@@ -2315,6 +2405,7 @@ where
 
     (
         ResponseStream {
+            account_scope: None,
             rx_event,
             consumer_dropped: consumer_dropped_for_stream,
         },

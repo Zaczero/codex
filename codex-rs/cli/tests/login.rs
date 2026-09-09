@@ -42,8 +42,11 @@ fn write_file_auth_config(codex_home: &Path) -> Result<()> {
 }
 
 fn read_auth_json(codex_home: &Path) -> Result<Value> {
-    let auth_json = std::fs::read_to_string(codex_home.join("auth.json"))?;
-    Ok(serde_json::from_str(&auth_json)?)
+    Ok(serde_json::to_value(codex_login::load_auth_dot_json(
+        codex_home,
+        codex_config::types::AuthCredentialsStoreMode::File,
+        codex_login::AuthKeyringBackendKind::default(),
+    )?)?)
 }
 
 #[test]

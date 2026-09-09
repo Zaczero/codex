@@ -371,10 +371,10 @@ async fn wait_for_turn_complete(codex: &codex_core::CodexThread) {
 }
 
 fn amazon_bedrock_test_codex() -> TestCodexBuilder {
-    let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-        api_key: "bedrock-test-api-key".to_string(),
-        region: "us-east-1".to_string(),
-    });
+    let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+        "bedrock-test-api-key".to_string(),
+        "us-east-1".to_string(),
+    ));
     test_codex()
         .with_auth(auth)
         .with_model(AMAZON_BEDROCK_GPT_5_5_MODEL_ID)
@@ -1674,15 +1674,25 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
         })
         .await?;
     let delegated_task_ciphertext = format!("delegated compact task{}", "x".repeat(40_000));
+    let account_scope = harness
+        .test()
+        .thread_manager
+        .auth_manager()
+        .auth()
+        .await
+        .and_then(|auth| auth.account_scope());
     codex
         .submit(Op::InterAgentCommunication {
-            communication: InterAgentCommunication::new_encrypted(
-                AgentPath::root(),
-                AgentPath::root().join("worker").expect("valid worker path"),
-                Vec::new(),
-                delegated_task_ciphertext.clone(),
-                /*trigger_turn*/ true,
-            ),
+            communication: InterAgentCommunication {
+                account_scope: account_scope.clone(),
+                ..InterAgentCommunication::new_encrypted(
+                    AgentPath::root(),
+                    AgentPath::root().join("worker").expect("valid worker path"),
+                    Vec::new(),
+                    delegated_task_ciphertext.clone(),
+                    /*trigger_turn*/ true,
+                )
+            },
             start_options: Default::default(),
         })
         .await?;
@@ -1692,13 +1702,16 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
     let worker_path = AgentPath::root().join("worker").expect("valid worker path");
     codex
         .submit(Op::InterAgentCommunication {
-            communication: InterAgentCommunication::new_encrypted(
-                worker_path.join("child").expect("valid grandchild path"),
-                worker_path,
-                Vec::new(),
-                descendant_followup_ciphertext.to_string(),
-                /*trigger_turn*/ true,
-            ),
+            communication: InterAgentCommunication {
+                account_scope,
+                ..InterAgentCommunication::new_encrypted(
+                    worker_path.join("child").expect("valid grandchild path"),
+                    worker_path,
+                    Vec::new(),
+                    descendant_followup_ciphertext.to_string(),
+                    /*trigger_turn*/ true,
+                )
+            },
             start_options: Default::default(),
         })
         .await?;

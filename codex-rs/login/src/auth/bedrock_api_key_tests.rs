@@ -8,8 +8,16 @@ use super::*;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::AuthManager;
 use crate::auth::CodexAuth;
-use crate::auth::storage::AuthStorageBackend;
-use crate::auth::storage::FileAuthStorage;
+use crate::auth::storage::AuthStorage;
+use crate::auth::storage::create_auth_storage;
+
+fn file_storage(home: &std::path::Path) -> std::sync::Arc<AuthStorage> {
+    create_auth_storage(
+        home.to_path_buf(),
+        AuthCredentialsStoreMode::File,
+        AuthKeyringBackendKind::default(),
+    )
+}
 
 fn api_key_auth() -> AuthDotJson {
     AuthDotJson {
@@ -38,10 +46,24 @@ fn bedrock_only_auth() -> AuthDotJson {
 }
 
 fn bedrock_auth() -> BedrockApiKeyAuth {
-    BedrockApiKeyAuth {
-        api_key: "bedrock-api-key-test".to_string(),
-        region: "us-east-1".to_string(),
-    }
+    BedrockApiKeyAuth::new("bedrock-api-key-test".to_string(), "us-east-1".to_string())
+}
+
+#[test]
+fn bedrock_account_scope_survives_loading_and_changes_with_credentials() {
+    let auth = bedrock_auth();
+    let stored = serde_json::to_value(&auth).unwrap();
+    assert_eq!(
+        stored,
+        serde_json::json!({"api_key":"bedrock-api-key-test", "region":"us-east-1"})
+    );
+    let restored: BedrockApiKeyAuth = serde_json::from_value(stored).unwrap();
+    assert_eq!(restored, auth);
+    assert_ne!(
+        restored.account_scope,
+        BedrockApiKeyAuth::new("other-key".to_owned(), "us-east-1".to_owned()).account_scope
+    );
+    assert!(!restored.account_scope.account_id.contains(auth.api_key()));
 }
 
 #[test]
@@ -62,7 +84,7 @@ fn bedrock_api_key_debug_redacts_secret() {
 #[serial(codex_auth_env)]
 async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     storage.save(&api_key_auth())?;
     login_with_bedrock_api_key(
         codex_home.path(),
@@ -116,7 +138,7 @@ async fn login_with_bedrock_api_key_replaces_openai_auth() -> anyhow::Result<()>
 #[serial(codex_auth_env)]
 async fn logout_removes_bedrock_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     login_with_bedrock_api_key(
         codex_home.path(),
         "bedrock-api-key-test",
@@ -146,7 +168,7 @@ async fn logout_removes_bedrock_auth() -> anyhow::Result<()> {
 #[serial(codex_auth_env)]
 async fn access_keys_auth_round_trips_and_logs_out() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     crate::auth::login_with_bedrock_access_keys(
         codex_home.path(),
         "access-key-id",
@@ -200,7 +222,7 @@ async fn access_keys_auth_round_trips_and_logs_out() -> anyhow::Result<()> {
 #[serial(codex_auth_env)]
 async fn bedrock_only_auth_storage_creates_primary_auth() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     storage.save(&bedrock_only_auth())?;
 
     let auth_manager = AuthManager::new(
@@ -234,7 +256,7 @@ async fn bedrock_only_auth_storage_creates_primary_auth() -> anyhow::Result<()> 
 #[tokio::test]
 async fn login_with_api_key_clears_bedrock_api_key() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
-    let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
+    let storage = file_storage(codex_home.path());
     login_with_bedrock_api_key(
         codex_home.path(),
         "bedrock-api-key-test",

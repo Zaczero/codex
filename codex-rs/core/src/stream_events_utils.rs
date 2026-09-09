@@ -79,11 +79,13 @@ pub(crate) async fn record_completed_response_item(
     sess: &Session,
     turn_context: &TurnContext,
     item: &ResponseItem,
+    account_scope: Option<&codex_protocol::auth::AccountScope>,
 ) {
     record_completed_response_item_with_finalized_facts(
         sess,
         turn_context,
         item,
+        account_scope,
         /*finalized_facts*/ None,
     )
     .await;
@@ -93,9 +95,10 @@ pub(crate) async fn record_completed_response_item_with_finalized_facts(
     sess: &Session,
     turn_context: &TurnContext,
     item: &ResponseItem,
+    account_scope: Option<&codex_protocol::auth::AccountScope>,
     finalized_facts: Option<&FinalizedTurnItemFacts>,
 ) {
-    sess.record_conversation_items(turn_context, std::slice::from_ref(item))
+    sess.record_account_response_item(turn_context, item, account_scope)
         .await;
     let defers_mailbox_delivery = finalized_facts.map_or_else(
         || {
@@ -205,6 +208,7 @@ pub(crate) struct OutputItemResult {
 }
 
 pub(crate) struct HandleOutputCtx {
+    pub account_scope: Option<codex_protocol::auth::AccountScope>,
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
     pub turn_store: Arc<ExtensionData>,
@@ -317,8 +321,13 @@ pub(crate) async fn handle_output_item_done(
                 payload_preview
             );
 
-            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+            record_completed_response_item(
+                ctx.sess.as_ref(),
+                ctx.turn_context.as_ref(),
+                &item,
+                ctx.account_scope.as_ref(),
+            )
+            .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
             let tool_future: InFlightFuture<'static> = Box::pin(
@@ -357,6 +366,7 @@ pub(crate) async fn handle_output_item_done(
                 ctx.sess.as_ref(),
                 ctx.turn_context.as_ref(),
                 &item,
+                ctx.account_scope.as_ref(),
                 finalized_facts.as_ref(),
             )
             .await;
@@ -372,8 +382,13 @@ pub(crate) async fn handle_output_item_done(
                     ..Default::default()
                 },
             };
-            record_completed_response_item(ctx.sess.as_ref(), ctx.turn_context.as_ref(), &item)
-                .await;
+            record_completed_response_item(
+                ctx.sess.as_ref(),
+                ctx.turn_context.as_ref(),
+                &item,
+                ctx.account_scope.as_ref(),
+            )
+            .await;
             if let Some(response_item) = response_input_to_response_item(&response) {
                 ctx.sess
                     .record_conversation_items(

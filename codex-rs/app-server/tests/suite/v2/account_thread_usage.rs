@@ -54,8 +54,8 @@ async fn account_thread_usage_uses_active_workspace_and_canonical_thread_ids() -
 
     Mock::given(method("POST"))
         .and(path("/api/codex/usage/thread_usage/query"))
-        .and(header("authorization", "Bearer active-token"))
-        .and(header("chatgpt-account-id", "active-workspace"))
+        .and(header("authorization", "Bearer different-token"))
+        .and(header("chatgpt-account-id", "different-workspace"))
         .and(body_json(json!({ "thread_ids": [thread_id] })))
         .respond_with(ResponseTemplate::new(/*s*/ 200).set_body_json(json!({
             "threads": [{

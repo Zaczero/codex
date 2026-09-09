@@ -76,13 +76,13 @@ pub struct LunaSamplerConfig {
 /// One tool-less Luna classification request.
 pub struct LunaSamplingRequest {
     /// ID of the response handling the classified tool.
-    pub parent_response_id: Option<String>,
+    pub parent_response_id: Option<codex_api::ResponseId>,
     /// Trusted instructions describing the requested classification.
     pub instructions: String,
     /// Composed evidence messages, with roles, annotations and content order intact.
     pub input: Vec<ResponseItem>,
     /// Opaque parent compaction to reuse only for compatible model configurations.
-    pub parent_compaction: Option<ResponseItem>,
+    pub parent_compaction: Option<codex_history::ResponseItemEnvelope>,
     /// Host-selected compatibility hash for the supplied parent checkpoint.
     pub parent_compaction_hash: Option<String>,
     /// Reasoning budget explicitly selected for this request.
@@ -270,9 +270,7 @@ impl LunaSampler {
                 internal_chat_message_metadata_passthrough: None,
             },
         ];
-        if let Some(parent_compaction) = request.parent_compaction {
-            input.push(parent_compaction);
-        }
+        let parent_compaction = request.parent_compaction;
         let mut evidence = request.input;
         for item in &mut evidence {
             if let ResponseItem::Message { content, .. } = item {
@@ -283,7 +281,11 @@ impl LunaSampler {
                 }
             }
         }
-        input.extend(evidence);
+        input.extend(
+            evidence.into_iter().filter_map(|item| {
+                codex_history::ResponseItemEnvelope::new(item).for_account(None)
+            }),
+        );
         // Assign IDs once so retries reuse the same input item identities.
         for item in &mut input {
             if item.id().is_none()
@@ -292,7 +294,7 @@ impl LunaSampler {
                 item.set_id(Some(ResponseItemId::new(prefix)));
             }
         }
-        let mut request = ResponsesApiRequest {
+        let request = ResponsesApiRequest {
             model: MODEL.to_owned(),
             instructions: String::new(),
             input,
@@ -309,7 +311,7 @@ impl LunaSampler {
             stream_options: None,
             include: Vec::new(),
             service_tier: None,
-            prompt_cache_key: Some(format!("guardian-v2:{}", self.config.thread_id)),
+            prompt_cache_key: None,
             text: None,
             client_metadata: None,
             access_programs: None,
@@ -359,6 +361,18 @@ impl LunaSampler {
                     return Err(error);
                 }
             };
+            let mut request = request.clone();
+            request.prompt_cache_key = Some(codex_protocol::auth::account_scoped_cache_key(
+                lease.account_scope.as_ref(),
+                &format!("guardian-v2:{}", self.config.thread_id),
+            ));
+            if let Some(checkpoint) = &parent_compaction {
+                let Some(checkpoint) = checkpoint.for_account(lease.account_scope.as_ref()) else {
+                    lease.reuse();
+                    return Err(LunaSamplerError::IncompatibleCompaction);
+                };
+                request.input.insert(2, checkpoint);
+            }
             request.service_tier = if lease.endpoint == ResponsesEndpoint::GuardianClassifier {
                 None
             } else {
@@ -389,9 +403,14 @@ impl LunaSampler {
             }
             client_metadata.insert(TURN_METADATA_KEY.to_owned(), turn_metadata.to_string());
             if lease.endpoint == ResponsesEndpoint::GuardianClassifier
-                && let Some(parent_response_id) = &parent_response_id
+                && let Some(parent_response_id) = parent_response_id
+                    .as_ref()
+                    .and_then(|id| id.for_account(lease.account_scope.as_ref()))
             {
-                client_metadata.insert("parent_response_id".to_owned(), parent_response_id.clone());
+                client_metadata.insert(
+                    "parent_response_id".to_owned(),
+                    parent_response_id.to_owned(),
+                );
             }
             request.client_metadata = Some(client_metadata);
             let mut stream = match tokio::select! {

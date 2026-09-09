@@ -105,6 +105,8 @@ pub enum ToolCallSource {
 
 #[derive(Clone)]
 pub struct ToolCall<'call> {
+    /// Known producer of this call's model-supplied encrypted arguments.
+    pub account_scope: Option<codex_protocol::auth::AccountScope>,
     pub turn_id: String,
     pub call_id: String,
     pub tool_name: ToolName,

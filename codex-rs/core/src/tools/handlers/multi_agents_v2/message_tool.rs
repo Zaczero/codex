@@ -58,6 +58,7 @@ pub(super) async fn handle_message_string_tool(
     analytics: &mut ToolCallAnalytics,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let message = message_content(message)?;
+    let account_scope = invocation.originating_account_scope().await;
     let ToolInvocation {
         session,
         turn,
@@ -96,13 +97,14 @@ pub(super) async fn handle_message_string_tool(
         .session_source
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
-    let communication = communication_from_tool_message(
+    let mut communication = communication_from_tool_message(
         author,
         receiver_agent_path.clone(),
         message,
         &source,
         mode.trigger_turn(),
     );
+    communication.account_scope = account_scope;
     let kind = match mode {
         MessageDeliveryMode::QueueOnly => AgentCommunicationKind::Message,
         MessageDeliveryMode::TriggerTurn => AgentCommunicationKind::Followup,

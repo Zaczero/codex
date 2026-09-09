@@ -2637,6 +2637,29 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
             /*reference_context_item*/ None,
         )
         .await;
+    let account_scope = session
+        .services
+        .auth_manager
+        .auth()
+        .await
+        .and_then(|auth| auth.account_scope());
+    let mut items = session.clone_history().await.into_annotated_items();
+    items[0].metadata.get_or_insert_default().account_scope = account_scope;
+    let (window_number, window_ids) = session.advance_auto_compact_window().await;
+    session
+        .replace_compacted_history(
+            items,
+            /*reference_context_item*/ None,
+            /*world_state_baseline*/ None,
+            crate::compact::CompactedHistoryMetadata {
+                message: String::new(),
+                window_number,
+                window_ids,
+                compaction_response_id: None,
+                compaction_model_hash: None,
+            },
+        )
+        .await;
     let third_request = GuardianApprovalRequest::ExecCommand {
         id: "shell-3".to_string(),
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),

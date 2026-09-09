@@ -149,7 +149,10 @@ async fn responses_stream_includes_subagent_header_on_review() {
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
-    }];
+    }]
+    .into_iter()
+    .map(Into::into)
+    .collect();
 
     let mut stream = client_session
         .stream(
@@ -286,7 +289,10 @@ async fn responses_stream_includes_subagent_header_on_other() {
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
-    }];
+    }]
+    .into_iter()
+    .map(Into::into)
+    .collect();
 
     let mut stream = client_session
         .stream(
@@ -408,7 +414,10 @@ async fn responses_respects_model_info_overrides_from_config() {
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
-    }];
+    }]
+    .into_iter()
+    .map(Into::into)
+    .collect();
 
     let mut stream = client_session
         .stream(

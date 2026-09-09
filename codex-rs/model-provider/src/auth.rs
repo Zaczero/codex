@@ -244,18 +244,18 @@ pub(crate) async fn resolve_provider_auth_for_scope(
         return resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new);
     }
 
-    let Some(auth_manager) = auth_manager else {
+    let (Some(auth_manager), Some(auth)) = (auth_manager, auth) else {
         return resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new);
     };
 
     match auth_manager
-        .agent_identity_auth(agent_identity_policy, session_source)
+        .agent_identity_auth_for_snapshot(auth, agent_identity_policy, session_source)
         .await
     {
         Ok(Some(agent_identity_auth)) => Ok(ResolvedProviderAuth::for_agent_identity(
             agent_identity_auth,
         )),
-        Ok(None) => resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new),
+        Ok(None) => resolve_provider_auth(Some(auth), provider).map(ResolvedProviderAuth::new),
         Err(err) => {
             if let Some(AgentIdentityAuthError::BootstrapUnavailable {
                 operation,
@@ -273,7 +273,7 @@ pub(crate) async fn resolve_provider_auth_for_scope(
                     newly_engaged,
                     "agent identity bootstrap unavailable; using ChatGPT bearer auth for this session"
                 );
-                resolve_provider_auth(auth, provider).map(ResolvedProviderAuth::new)
+                resolve_provider_auth(Some(auth), provider).map(ResolvedProviderAuth::new)
             } else {
                 Err(err.into())
             }
@@ -502,10 +502,10 @@ mod tests {
     fn custom_provider_does_not_inherit_ambient_bedrock_auth() {
         let provider =
             create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
-        let ambient_auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-            api_key: "bedrock-api-key-test".to_string(),
-            region: "us-east-1".to_string(),
-        });
+        let ambient_auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+            "bedrock-api-key-test".to_string(),
+            "us-east-1".to_string(),
+        ));
 
         let auth =
             resolve_provider_auth(Some(&ambient_auth), &provider).expect("auth should resolve");
@@ -518,10 +518,10 @@ mod tests {
         let mut provider =
             create_oss_provider_with_base_url("http://localhost:11434/v1", WireApi::Responses);
         provider.experimental_bearer_token = Some("provider-token".into());
-        let ambient_auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-            api_key: "bedrock-api-key-test".to_string(),
-            region: "us-east-1".to_string(),
-        });
+        let ambient_auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+            "bedrock-api-key-test".to_string(),
+            "us-east-1".to_string(),
+        ));
 
         let headers = resolve_provider_auth(Some(&ambient_auth), &provider)
             .expect("auth should resolve")
@@ -598,10 +598,10 @@ mod tests {
     #[test]
     fn openai_provider_rejects_bedrock_api_key_auth() {
         let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
-        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-            api_key: "bedrock-api-key-test".to_string(),
-            region: "us-east-1".to_string(),
-        });
+        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+            "bedrock-api-key-test".to_string(),
+            "us-east-1".to_string(),
+        ));
 
         match resolve_provider_auth(Some(&auth), &provider) {
             Err(err) => match err.details() {

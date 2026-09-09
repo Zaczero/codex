@@ -1,4 +1,5 @@
 pub use codex_api::ResponseEvent;
+use codex_history::ResponseItemEnvelope;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -18,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 #[derive(Debug, Clone)]
 pub struct Prompt {
     /// Conversation context input items.
-    pub input: Vec<ResponseItem>,
+    pub input: Vec<ResponseItemEnvelope>,
 
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
@@ -56,8 +57,13 @@ impl Prompt {
     pub(crate) fn get_formatted_input_for_request(
         &self,
         use_responses_lite: bool,
+        account_scope: Option<&codex_protocol::auth::AccountScope>,
     ) -> Vec<ResponseItem> {
-        let mut input = self.input.clone();
+        let mut input = self
+            .input
+            .iter()
+            .filter_map(|item| item.for_account(account_scope))
+            .collect::<Vec<_>>();
         if use_responses_lite {
             strip_image_details(&mut input);
         }
@@ -107,10 +113,16 @@ fn strip_image_details(items: &mut [ResponseItem]) {
 }
 
 pub struct ResponseStream {
+    pub(crate) account_scope: Option<codex_protocol::auth::AccountScope>,
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
     /// Signals the mapper task that the consumer stopped polling before the
     /// provider stream reached its own terminal event.
     pub(crate) consumer_dropped: CancellationToken,
+}
+
+pub(crate) struct CompactedResponse {
+    pub(crate) items: Vec<ResponseItem>,
+    pub(crate) account_scope: Option<codex_protocol::auth::AccountScope>,
 }
 
 impl Stream for ResponseStream {

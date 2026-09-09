@@ -201,6 +201,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall<'_>
         });
     }
     ExtensionToolCall {
+        account_scope: invocation.originating_account_scope().await,
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
@@ -355,6 +356,7 @@ mod tests {
                 .map(|environment| environment.file_system_sandbox_context.cwd.clone())
                 .collect();
             let call = codex_tools::ToolCall {
+                account_scope: None,
                 environments: Vec::new(),
                 ..call
             };

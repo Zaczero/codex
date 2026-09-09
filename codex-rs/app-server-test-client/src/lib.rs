@@ -1816,6 +1816,7 @@ impl CodexClient {
                 app_brand: None,
                 codex_streamlined_login: false,
                 use_hosted_login_success_page: false,
+                account_label: None,
             },
         };
 
@@ -1826,7 +1827,9 @@ impl CodexClient {
         let request_id = self.request_id();
         let request = ClientRequest::LoginAccount {
             request_id: request_id.clone(),
-            params: codex_app_server_protocol::LoginAccountParams::ChatgptDeviceCode,
+            params: codex_app_server_protocol::LoginAccountParams::ChatgptDeviceCode {
+                account_label: None,
+            },
         };
 
         self.send_request(request, request_id, "account/login/start")

@@ -80,6 +80,95 @@ const WORKSPACE_ID_REFRESHED: &str = "123e4567-e89b-42d3-a456-426614174012";
 const WORKSPACE_ID_DEVICE: &str = "123e4567-e89b-42d3-a456-426614174013";
 const WORKSPACE_ID_STALE: &str = "123e4567-e89b-42d3-a456-426614174014";
 
+#[tokio::test]
+async fn named_account_rpc_preserves_ids_and_other_credentials() -> Result<()> {
+    let home = TempDir::new()?;
+    create_config_toml(home.path(), CreateConfigTomlParams::default())?;
+    let mut ids = Vec::new();
+    for (label, key) in [("personal", "secret-personal"), ("work", "secret-work")] {
+        let credentials: AuthDotJson = serde_json::from_value(json!({
+            "auth_mode": "apikey", "OPENAI_API_KEY": key
+        }))?;
+        ids.push(
+            codex_login::auth::save_named_account(
+                home.path(),
+                label,
+                &credentials,
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )?
+            .id,
+        );
+    }
+    let mut server = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let id = server
+        .send_request("account/switch", Some(json!({"accountId": ids[0]})))
+        .await?;
+    let switched: codex_app_server_protocol::AccountSwitchResponse =
+        timeout(DEFAULT_READ_TIMEOUT, server.read_response(id)).await??;
+    assert_eq!(switched.account.id, ids[0]);
+    assert!(switched.account.is_active);
+    let id = server
+        .send_request(
+            "account/rename",
+            Some(json!({"accountId": ids[0], "label": "travel"})),
+        )
+        .await?;
+    let renamed: codex_app_server_protocol::AccountRenameResponse =
+        timeout(DEFAULT_READ_TIMEOUT, server.read_response(id)).await??;
+    let mut expected = switched.account;
+    expected.label = "travel".to_string();
+    assert_eq!(renamed.account, expected);
+    let id = server.send_request("account/list", /*params*/ None).await?;
+    let listed: codex_app_server_protocol::AccountListResponse =
+        timeout(DEFAULT_READ_TIMEOUT, server.read_response(id)).await??;
+    assert_eq!(
+        listed
+            .accounts
+            .iter()
+            .map(|account| (
+                account.id.as_str(),
+                account.label.as_str(),
+                account.is_active
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (ids[0].as_str(), "travel", true),
+            (ids[1].as_str(), "work", false)
+        ]
+    );
+    let serialized = serde_json::to_string(&listed)?;
+    assert!(!serialized.contains("secret-personal"));
+    assert!(!serialized.contains("secret-work"));
+    let id = server
+        .send_request("account/remove", Some(json!({"accountId": ids[0]})))
+        .await?;
+    let removed: codex_app_server_protocol::AccountRemoveResponse =
+        timeout(DEFAULT_READ_TIMEOUT, server.read_response(id)).await??;
+    assert!(removed.removed);
+    let id = server
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let account: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, server.read_response(id)).await??;
+    assert_eq!(account.account, None);
+    let id = server
+        .send_request("account/switch", Some(json!({"accountId": ids[1]})))
+        .await?;
+    let remaining: codex_app_server_protocol::AccountSwitchResponse =
+        timeout(DEFAULT_READ_TIMEOUT, server.read_response(id)).await??;
+    assert_eq!(remaining.account.id, ids[1]);
+    assert!(remaining.account.is_active);
+    Ok(())
+}
+
 // Helper to create a minimal config.toml for the app server
 #[derive(Default)]
 struct CreateConfigTomlParams {
@@ -1185,10 +1274,10 @@ async fn login_amazon_bedrock_replaces_primary_auth_and_persists_provider(
             last_refresh: None,
             agent_identity: None,
             personal_access_token: None,
-            bedrock_api_key: (!managed_access_keys).then(|| BedrockApiKeyAuth {
-                api_key: "managed-bedrock-api-key".to_string(),
-                region: "us-west-2".to_string(),
-            }),
+            bedrock_api_key: (!managed_access_keys).then(|| BedrockApiKeyAuth::new(
+                "managed-bedrock-api-key".to_string(),
+                "us-west-2".to_string()
+            )),
             bedrock_access_keys: managed_access_keys.then(|| BedrockAccessKeysAuth {
                 access_key_id: "test-id".to_string(),
                 secret_access_key: "test-secret".to_string(),
@@ -1413,10 +1502,10 @@ async fn login_amazon_bedrock_allows_bedrock_provider_override() -> Result<()> {
             last_refresh: None,
             agent_identity: None,
             personal_access_token: None,
-            bedrock_api_key: Some(BedrockApiKeyAuth {
-                api_key: "managed-bedrock-api-key".to_string(),
-                region: "us-west-2".to_string(),
-            }),
+            bedrock_api_key: Some(BedrockApiKeyAuth::new(
+                "managed-bedrock-api-key".to_string(),
+                "us-west-2".to_string()
+            )),
             bedrock_access_keys: None,
         })
     );

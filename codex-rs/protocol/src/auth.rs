@@ -3,6 +3,24 @@ use serde::Serialize;
 use strum_macros::Display;
 use thiserror::Error;
 
+/// Stable credential provenance for account-bound model state, excluding rotating tokens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AccountScope {
+    pub local_account_id: Option<String>,
+    pub account_id: String,
+    pub user_id: Option<String>,
+}
+
+/// Deterministic request-cache partition, independent of account labels and token rotation.
+pub fn account_scoped_cache_key(account: Option<&AccountScope>, namespace: &str) -> String {
+    #[expect(
+        clippy::expect_used,
+        reason = "AccountScope and namespace contain only serializable strings and options"
+    )]
+    let identity = serde_json::to_vec(&(account, namespace)).expect("account identity serializes");
+    uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, &identity).to_string()
+}
+
 /// Authentication mode for OpenAI-backed providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Display, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -320,6 +320,10 @@ pub(crate) enum AppEvent {
     },
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
+    /// Open the named account picker backed by the shared auth service.
+    OpenAccountPicker,
+    /// Select a named account from the account picker.
+    SwitchNamedAccount(String),
     /// Merge a completed root-scoped agent-picker refresh without blocking terminal input.
     AgentPickerThreadsLoaded {
         primary_thread_id: ThreadId,

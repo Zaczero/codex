@@ -2282,7 +2282,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(mcp_test_value)]
-async fn stdio_encrypted_content_responses_round_trip() -> anyhow::Result<()> {
+async fn stdio_output_without_account_provenance_preserves_only_plaintext() -> anyhow::Result<()> {
     skip_if_wine_exec!(
         Ok(()),
         "requires a Windows test_stdio_server in the Wine-exec environment"
@@ -2347,7 +2347,7 @@ async fn stdio_encrypted_content_responses_round_trip() -> anyhow::Result<()> {
     let output = output_item["output"]
         .as_array()
         .expect("encrypted MCP output should be content items");
-    assert_eq!(output.len(), 3);
+    assert_eq!(output.len(), 2);
     assert_wall_time_header(
         output[0]["text"]
             .as_str()
@@ -2355,16 +2355,10 @@ async fn stdio_encrypted_content_responses_round_trip() -> anyhow::Result<()> {
     );
     assert_eq!(
         &output[1..],
-        &[
-            json!({
-                "type": "input_text",
-                "text": "Lookup completed",
-            }),
-            json!({
-                "type": "encrypted_content",
-                "encrypted_content": "gAAAA-test",
-            }),
-        ]
+        &[json!({
+            "type": "input_text",
+            "text": "Lookup completed",
+        }),]
     );
     server.verify().await;
     Ok(())

@@ -2882,6 +2882,23 @@ impl App {
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker(app_server).await;
             }
+            AppEvent::OpenAccountPicker => match app_server.list_named_accounts().await {
+                Ok(response) => self.chat_widget.show_account_picker(response.accounts),
+                Err(err) => self
+                    .chat_widget
+                    .add_error_message(format!("Failed to list named accounts: {err}")),
+            },
+            AppEvent::SwitchNamedAccount(account_id) => {
+                match app_server.switch_named_account(account_id).await {
+                    Ok(response) => self.chat_widget.add_info_message(format!(
+                        "Switched to account {}",
+                        response.account.label
+                    ), /*hint*/ None),
+                    Err(err) => self
+                        .chat_widget
+                        .add_error_message(format!("Failed to switch account: {err}")),
+                }
+            }
             AppEvent::AgentPickerThreadsLoaded {
                 primary_thread_id,
                 request_id,

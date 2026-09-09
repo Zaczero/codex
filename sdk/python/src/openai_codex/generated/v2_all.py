@@ -43,6 +43,35 @@ class AmazonBedrockAccount(BaseModel):
     ] = False
 
 
+class AccountRemoveParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_id: Annotated[str, Field(alias="accountId")]
+
+
+class AccountRemoveResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    removed: bool
+
+
+class AccountRenameParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_id: Annotated[str, Field(alias="accountId")]
+    label: str
+
+
+class AccountSwitchParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_id: Annotated[str, Field(alias="accountId")]
+
+
 class AccountTokenUsageDailyBucket(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -2199,6 +2228,13 @@ class ChatgptDeviceCodeLoginAccountParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    account_label: Annotated[
+        str | None,
+        Field(
+            alias="accountLabel",
+            description="Insert successful credentials under this local label instead of replacing the active record.",
+        ),
+    ] = None
     type: Annotated[
         Literal["chatgptDeviceCode"], Field(title="ChatgptDeviceCodev2::LoginAccountParamsType")
     ]
@@ -7204,6 +7240,42 @@ class AccountLogoutRequest(BaseModel):
     params: None = None
 
 
+class AccountListRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["account/list"], Field(title="Account/listRequestMethod")]
+    params: None = None
+
+
+class AccountRenameRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["account/rename"], Field(title="Account/renameRequestMethod")]
+    params: AccountRenameParams
+
+
+class AccountSwitchRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["account/switch"], Field(title="Account/switchRequestMethod")]
+    params: AccountSwitchParams
+
+
+class AccountRemoveRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["account/remove"], Field(title="Account/removeRequestMethod")]
+    params: AccountRemoveParams
+
+
 class AccountRateLimitsReadRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -8155,6 +8227,13 @@ class ChatgptLoginAccountParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    account_label: Annotated[
+        str | None,
+        Field(
+            alias="accountLabel",
+            description="Insert successful credentials under this local label instead of replacing the active record.",
+        ),
+    ] = None
     app_brand: Annotated[LoginAppBrand | None, Field(alias="appBrand")] = None
     codex_streamlined_login: Annotated[bool | None, Field(alias="codexStreamlinedLogin")] = None
     type: Annotated[Literal["chatgpt"], Field(title="Chatgptv2::LoginAccountParamsType")]
@@ -8332,6 +8411,19 @@ class ModelListResponse(BaseModel):
             description="Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
         ),
     ] = None
+
+
+class NamedAccount(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_id: Annotated[str | None, Field(alias="accountId")] = None
+    auth_mode: Annotated[AuthMode, Field(alias="authMode")]
+    email: str | None = None
+    id: str
+    is_active: Annotated[bool, Field(alias="isActive")]
+    label: str
+    plan_type: Annotated[PlanType | None, Field(alias="planType")] = None
 
 
 class NewThreadModelDefaults(BaseModel):
@@ -9949,11 +10041,32 @@ class WorkspaceMessage(BaseModel):
     message_type: Annotated[WorkspaceMessageType, Field(alias="messageType")]
 
 
+class AccountListResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    accounts: list[NamedAccount]
+
+
 class AccountRateLimitsUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
     rate_limits: Annotated[RateLimitSnapshot, Field(alias="rateLimits")]
+
+
+class AccountRenameResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account: NamedAccount
+
+
+class AccountSwitchResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account: NamedAccount
 
 
 class AppInfo(BaseModel):
@@ -12017,6 +12130,10 @@ class ClientRequest(
         | AccountLoginStartRequest
         | AccountLoginCancelRequest
         | AccountLogoutRequest
+        | AccountListRequest
+        | AccountRenameRequest
+        | AccountSwitchRequest
+        | AccountRemoveRequest
         | AccountRateLimitsReadRequest
         | AccountRateLimitResetCreditConsumeRequest
         | AccountUsageReadRequest
@@ -12122,6 +12239,10 @@ class ClientRequest(
         | AccountLoginStartRequest
         | AccountLoginCancelRequest
         | AccountLogoutRequest
+        | AccountListRequest
+        | AccountRenameRequest
+        | AccountSwitchRequest
+        | AccountRemoveRequest
         | AccountRateLimitsReadRequest
         | AccountRateLimitResetCreditConsumeRequest
         | AccountUsageReadRequest

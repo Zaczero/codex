@@ -106,6 +106,12 @@ nix develop --impure --expr '
 Use the same environment for `just fix -p codex-login` and `just fmt`. Cargo's
 existing build directory is shared across these invocations.
 
+Cargo can place standalone helper binaries in `target/debug` while nextest uses
+the centralized build directory. For Guardian integration tests, build
+`cargo build -p codex-rmcp-client --bin test_stdio_server` from `codex-rs`, then
+set `CARGO_BIN_EXE_test_stdio_server` to the absolute path of that executable
+when invoking `just test`.
+
 The pinned Python SDK schema generator (`datamodel-code-generator==0.31.2`)
 does not support running under Python 3.14. Use `UV_PYTHON=3.13` when invoking
 `just write-app-server-schema`; Python 3.13 satisfies the SDK's declared range.
@@ -130,6 +136,21 @@ nix develop --impure --expr '
 
 Use the same environment for `just fix -p codex-login` and `just fmt`. Cargo's
 existing build directory is shared across these invocations.
+
+## Account-bound history
+
+Luna Reserve's saved return model and effort are thread-local preferences. Preserve
+them across account switches, but restore them only after a fresh, identity-validated
+usage response permits ordinary models for the current account. Old usage responses
+and missing identity cannot authorize recovery; manual model selection clears the target.
+
+Keep `ResponseItemEnvelope` provenance through prompt construction and project
+opaque content against the actual request's credential snapshot. Selection at
+turn start is insufficient because authentication may change before a request
+or during recovery. Unknown producer identity fails closed. Record model,
+compaction, inter-agent, and authenticated tool output provenance before durable
+history; never infer it from the account selected while replaying a rollout.
+Backend response references and transport reuse must use the same account scope.
 
 ## The `codex-core` crate
 

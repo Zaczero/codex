@@ -78,6 +78,7 @@ async fn refresh_without_id_token() {
     );
     let updated = super::persist_tokens(
         &storage,
+        &storage.load_bank().unwrap().selected_account_id.unwrap(),
         &storage.load().unwrap().unwrap(),
         /*id_token*/ None,
         Some("new-access-token".to_string()),
@@ -120,8 +121,11 @@ fn login_with_api_key_overwrites_existing_auth_json() {
 
     let storage = FileAuthStorage::new(dir.path().to_path_buf());
     let auth = storage
-        .try_read_auth_json(&auth_path)
-        .expect("auth.json should parse");
+        .load()
+        .expect("auth.json should parse")
+        .and_then(|bank| bank.selected())
+        .expect("selected credentials should exist")
+        .auth;
     assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
     assert!(auth.tokens.is_none(), "tokens should be cleared");
 }
@@ -130,7 +134,6 @@ fn login_with_api_key_overwrites_existing_auth_json() {
 #[serial(codex_auth_env)]
 async fn login_with_access_token_writes_agent_identity_jwt() {
     let dir = tempdir().unwrap();
-    let auth_path = dir.path().join("auth.json");
     let record = agent_identity_record(WORKSPACE_ID_ALLOWED);
     let agent_identity =
         signed_agent_identity_jwt(&record, json!(record.plan_type)).expect("signed agent identity");
@@ -158,8 +161,11 @@ async fn login_with_access_token_writes_agent_identity_jwt() {
 
     let storage = FileAuthStorage::new(dir.path().to_path_buf());
     let auth = storage
-        .try_read_auth_json(&auth_path)
-        .expect("auth.json should parse");
+        .load()
+        .expect("auth.json should parse")
+        .and_then(|bank| bank.selected())
+        .expect("selected credentials should exist")
+        .auth;
     assert_eq!(auth.auth_mode, Some(AuthMode::AgentIdentity));
     assert_eq!(
         auth.agent_identity,
@@ -397,8 +403,11 @@ async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result
     assert_eq!(agent_identity_auth.run_task_id(), "task-id");
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
     let auth = storage
-        .try_read_auth_json(&get_auth_file(codex_home.path()))
-        .expect("auth.json should parse");
+        .load()
+        .expect("auth.json should parse")
+        .and_then(|bank| bank.selected())
+        .expect("selected credentials should exist")
+        .auth;
     assert_eq!(
         auth.agent_identity,
         Some(AgentIdentityStorage::Jwt(agent_identity))
@@ -411,7 +420,6 @@ async fn stored_agent_identity_jwt_keeps_auth_json_unchanged() -> anyhow::Result
 #[serial(codex_auth_env)]
 async fn login_with_access_token_writes_only_personal_access_token() {
     let dir = tempdir().unwrap();
-    let auth_path = dir.path().join("auth.json");
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/user-auth-credential/whoami"))
@@ -439,8 +447,11 @@ async fn login_with_access_token_writes_only_personal_access_token() {
 
     let storage = FileAuthStorage::new(dir.path().to_path_buf());
     let auth = storage
-        .try_read_auth_json(&auth_path)
-        .expect("auth.json should parse");
+        .load()
+        .expect("auth.json should parse")
+        .and_then(|bank| bank.selected())
+        .expect("selected credentials should exist")
+        .auth;
     assert_eq!(
         auth,
         AuthDotJson {
@@ -456,8 +467,12 @@ async fn login_with_access_token_writes_only_personal_access_token() {
     );
     assert_eq!(auth.resolved_mode(), AuthMode::PersonalAccessToken);
     let persisted: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(auth_path).unwrap()).unwrap();
-    assert!(persisted.get("auth_mode").is_none());
+        serde_json::from_str(&std::fs::read_to_string(get_auth_file(dir.path())).unwrap()).unwrap();
+    let selected_id = persisted["selected_account_id"].as_str().unwrap();
+    let selected_auth = persisted["accounts"][selected_id]["auth"]
+        .as_object()
+        .unwrap();
+    assert!(!selected_auth.contains_key("auth_mode"));
     server.verify().await;
 }
 
@@ -818,10 +833,14 @@ async fn chatgpt_auth_task_registration_retry_exhaustion_is_fallback_eligible() 
     record.chatgpt_user_id = "user-12345".to_string();
     record.email = Some("user@example.com".to_string());
     let storage = FileAuthStorage::new(codex_home.path().to_path_buf());
-    let auth_path = get_auth_file(codex_home.path());
-    let mut auth_json = storage.try_read_auth_json(&auth_path)?;
+    let mut bank = storage.load()?.expect("stored credentials should exist");
+    let selected_id = bank
+        .selected_account_id
+        .clone()
+        .expect("selected account should exist");
+    let auth_json = &mut bank.accounts.get_mut(&selected_id).unwrap().auth;
     auth_json.agent_identity = Some(AgentIdentityStorage::Record(record.clone()));
-    storage.save(&auth_json)?;
+    storage.save(&bank)?;
     let auth = super::load_auth(
         codex_home.path(),
         /*enable_codex_api_key_env*/ false,
@@ -1157,6 +1176,7 @@ async fn unauthorized_recovery_reports_mode_and_step_names() {
         manager: Arc::clone(&manager),
         step: UnauthorizedRecoveryStep::Reload,
         expected_account_id: None,
+        expected_auth: None,
         mode: UnauthorizedRecoveryMode::Managed,
     };
     assert_eq!(managed.mode_name(), "managed");
@@ -1166,6 +1186,7 @@ async fn unauthorized_recovery_reports_mode_and_step_names() {
         manager,
         step: UnauthorizedRecoveryStep::ExternalRefresh,
         expected_account_id: None,
+        expected_auth: None,
         mode: UnauthorizedRecoveryMode::External,
     };
     assert_eq!(external.mode_name(), "external");
@@ -1210,14 +1231,18 @@ async fn refresh_failure_is_scoped_to_the_matching_auth_snapshot() {
         .expect("tokens should exist");
     updated_tokens.access_token = "new-access-token".to_string();
     updated_tokens.refresh_token = "new-refresh-token".to_string();
+    let CodexAuth::Chatgpt(original) = &auth else {
+        panic!("expected managed ChatGPT authentication");
+    };
     let updated_auth = CodexAuth::from_auth_dot_json(
-        codex_home.path(),
         updated_auth_dot_json,
-        AuthCredentialsStoreMode::File,
         /*chatgpt_base_url*/ None,
-        AuthKeyringBackendKind::Direct,
         /*agent_identity_authapi_base_url*/ None,
         &crate::test_support::transport_default_auth_route_config(),
+        (
+            Arc::clone(&original.storage),
+            original.local_account_id.clone(),
+        ),
     )
     .await
     .expect("updated auth should parse");

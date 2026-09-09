@@ -219,6 +219,7 @@ use codex_protocol::error::Result as CodexResult;
 #[cfg(test)]
 use codex_protocol::exec_output::StreamOutput;
 
+mod account_history;
 mod code_mode_warning;
 pub(crate) mod context_window;
 mod environment;
@@ -3726,11 +3727,20 @@ impl Session {
         );
         let items = items.as_ref();
         let response_item = items[0].clone();
+        let envelope = ResponseItemEnvelope {
+            item: response_item,
+            metadata: communication.account_scope.map(|account_scope| {
+                codex_history::CodexHarnessMetadata {
+                    account_scope: Some(account_scope),
+                    ..Default::default()
+                }
+            }),
+        };
         {
             let mut state = self.state.lock().await;
             state.current_time_reminder.note_recorded_items(items);
-            state.record_items(
-                items.iter(),
+            state.history.record_annotated_items(
+                std::slice::from_ref(&envelope),
                 turn_context.model_info().truncation_policy.into(),
             );
         }
@@ -3738,7 +3748,7 @@ impl Session {
             RolloutItem::InterAgentCommunicationMetadata {
                 trigger_turn: communication.trigger_turn,
             },
-            RolloutItem::ResponseItem(response_item.into()),
+            RolloutItem::ResponseItem(envelope),
         ])
         .await;
         self.send_raw_response_items(turn_context, items).await;

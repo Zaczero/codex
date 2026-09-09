@@ -1404,11 +1404,11 @@ mod tests {
             ))
             .and(wiremock::matchers::header(
                 "authorization",
-                "Bearer chatgpt-token",
+                "Bearer different-token",
             ))
             .and(wiremock::matchers::header(
                 "chatgpt-account-id",
-                "account-123",
+                "different-account",
             ))
             .and(wiremock::matchers::body_json(serde_json::json!({
                 "thread_ids": [thread_id.to_string()]

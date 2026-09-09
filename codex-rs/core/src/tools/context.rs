@@ -70,6 +70,30 @@ pub struct ToolInvocation {
 }
 
 impl ToolInvocation {
+    pub(crate) async fn originating_account_scope(
+        &self,
+    ) -> Option<codex_protocol::auth::AccountScope> {
+        self.session
+            .clone_history()
+            .await
+            .into_annotated_items()
+            .into_iter()
+            .rev()
+            .find_map(|envelope| match &envelope.item {
+                ResponseItem::FunctionCall { call_id, .. }
+                | ResponseItem::CustomToolCall { call_id, .. }
+                    if call_id == &self.call_id =>
+                {
+                    Some(
+                        envelope
+                            .metadata
+                            .and_then(|metadata| metadata.account_scope),
+                    )
+                }
+                _ => None,
+            })
+            .flatten()
+    }
     /// Returns the Responses item that requested this call or started its code-mode cell.
     pub(crate) async fn originating_item_id(&self) -> Option<ResponseItemId> {
         if let ToolCallSource::CodeMode { cell_id, .. } = &self.source {

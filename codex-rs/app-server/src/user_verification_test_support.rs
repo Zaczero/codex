@@ -209,10 +209,25 @@ impl Harness {
     }
 
     pub(super) async fn response(&mut self) -> OutgoingMessage {
-        let envelope = timeout(Duration::from_secs(/*secs*/ 10), self.messages.recv())
-            .await
-            .expect("response deadline")
-            .expect("response channel");
+        let envelope = timeout(Duration::from_secs(/*secs*/ 10), async {
+            loop {
+                let envelope = self.messages.recv().await?;
+                if let OutgoingEnvelope::Broadcast {
+                    message: OutgoingMessage::AppServerNotification(notification),
+                } = &envelope
+                    && matches!(
+                        notification.notification,
+                        codex_app_server_protocol::ServerNotification::AccountUpdated(_)
+                    )
+                {
+                    continue;
+                }
+                return Some(envelope);
+            }
+        })
+        .await
+        .expect("response deadline")
+        .expect("response channel");
         let OutgoingEnvelope::ToConnection {
             connection_id,
             message,

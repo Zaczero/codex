@@ -2399,7 +2399,7 @@ impl ToolLifecycleContributor for ResponseIdObserver {
                     input
                         .turn_store
                         .get::<codex_api::ResponseId>()
-                        .map(|id| id.0.clone()),
+                        .map(|id| id.value.clone()),
                 ));
                 if input.tool_name.name == "wait" {
                     self.wait_started.notify_one();

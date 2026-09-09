@@ -100,10 +100,10 @@ async fn amazon_bedrock_web_search_uses_text_only_hosted_tools() {
         )
         .await;
 
-        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-            api_key: "dummy".to_string(),
-            region: "us-east-1".to_string(),
-        });
+        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+            "dummy".to_string(),
+            "us-east-1".to_string(),
+        ));
         let mut builder = test_codex().with_auth(auth);
         builder = match model_catalog {
             ModelCatalog::BuiltIn => builder.with_model(AMAZON_BEDROCK_GPT_5_4_MODEL_ID),
@@ -162,10 +162,10 @@ async fn amazon_bedrock_runtime_preserves_cross_region_models_without_web_search
             ]),
         )
         .await;
-        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-            api_key: "dummy".to_string(),
-            region: "us-east-1".to_string(),
-        });
+        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+            "dummy".to_string(),
+            "us-east-1".to_string(),
+        ));
         let mut builder = test_codex()
             .with_auth(auth)
             .with_model(model)
@@ -226,10 +226,10 @@ async fn amazon_bedrock_web_search_is_disabled_when_managed_requirements_prohibi
         )
         .await;
 
-        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
-            api_key: "dummy".to_string(),
-            region: "us-east-1".to_string(),
-        });
+        let auth = CodexAuth::BedrockApiKey(BedrockApiKeyAuth::new(
+            "dummy".to_string(),
+            "us-east-1".to_string(),
+        ));
         let mut builder = test_codex()
             .with_auth(auth)
             .with_model(AMAZON_BEDROCK_GPT_5_4_MODEL_ID)

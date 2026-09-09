@@ -124,13 +124,14 @@ impl ContextContributor for HistoryNotesExtension {
                     &identity.agent_name,
                     json!({}),
                     TruncationPolicy::Bytes(MAX_THREAD_HINT_BYTES),
+                    /*originating_account*/ None,
                 )
                 .await
             else {
                 track_status(ThreadHintStatus::Failed);
                 return Vec::new();
             };
-            let Some(text) = result.get("text").and_then(serde_json::Value::as_str) else {
+            let Some(text) = result.value.get("text").and_then(serde_json::Value::as_str) else {
                 track_status(ThreadHintStatus::Failed);
                 return Vec::new();
             };

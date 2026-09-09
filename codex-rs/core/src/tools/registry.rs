@@ -198,14 +198,14 @@ impl AnyToolResult {
             result,
             ..
         } = self;
+        let metadata = CodexHarnessMetadata {
+            account_scope: result.account_scope(),
+            fallback_token_limit_override: result.fallback_token_limit_override(),
+            ..Default::default()
+        };
         ResponseItemEnvelope {
             item: result.to_response_item(&call_id, &payload).into(),
-            metadata: result
-                .fallback_token_limit_override()
-                .map(|limit| CodexHarnessMetadata {
-                    fallback_token_limit_override: Some(limit),
-                    ..Default::default()
-                }),
+            metadata: (metadata != CodexHarnessMetadata::default()).then_some(metadata),
         }
     }
 
@@ -233,6 +233,10 @@ impl ToolOutput for PostToolUseFeedbackOutput {
 
     fn fallback_token_limit_override(&self) -> Option<usize> {
         self.original.fallback_token_limit_override()
+    }
+
+    fn account_scope(&self) -> Option<codex_protocol::auth::AccountScope> {
+        self.original.account_scope()
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {

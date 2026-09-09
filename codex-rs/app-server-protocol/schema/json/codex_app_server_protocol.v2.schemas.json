@@ -72,6 +72,22 @@
         }
       ]
     },
+    "AccountListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "accounts": {
+          "items": {
+            "$ref": "#/definitions/NamedAccount"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "accounts"
+      ],
+      "title": "AccountListResponse",
+      "type": "object"
+    },
     "AccountLoginCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -119,6 +135,88 @@
         "rateLimits"
       ],
       "title": "AccountRateLimitsUpdatedNotification",
+      "type": "object"
+    },
+    "AccountRemoveParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "accountId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountId"
+      ],
+      "title": "AccountRemoveParams",
+      "type": "object"
+    },
+    "AccountRemoveResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "removed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "removed"
+      ],
+      "title": "AccountRemoveResponse",
+      "type": "object"
+    },
+    "AccountRenameParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "accountId": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountId",
+        "label"
+      ],
+      "title": "AccountRenameParams",
+      "type": "object"
+    },
+    "AccountRenameResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "account": {
+          "$ref": "#/definitions/NamedAccount"
+        }
+      },
+      "required": [
+        "account"
+      ],
+      "title": "AccountRenameResponse",
+      "type": "object"
+    },
+    "AccountSwitchParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "accountId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "accountId"
+      ],
+      "title": "AccountSwitchParams",
+      "type": "object"
+    },
+    "AccountSwitchResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "account": {
+          "$ref": "#/definitions/NamedAccount"
+        }
+      },
+      "required": [
+        "account"
+      ],
+      "title": "AccountSwitchResponse",
       "type": "object"
     },
     "AccountTokenUsageDailyBucket": {
@@ -3626,6 +3724,101 @@
             "method"
           ],
           "title": "Account/logoutRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/list"
+              ],
+              "title": "Account/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/rename"
+              ],
+              "title": "Account/renameRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AccountRenameParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/renameRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/switch"
+              ],
+              "title": "Account/switchRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AccountSwitchParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/switchRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/remove"
+              ],
+              "title": "Account/removeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/AccountRemoveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/removeRequest",
           "type": "object"
         },
         {
@@ -9791,6 +9984,13 @@
         },
         {
           "properties": {
+            "accountLabel": {
+              "description": "Insert successful credentials under this local label instead of replacing the active record.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "appBrand": {
               "anyOf": [
                 {
@@ -9824,6 +10024,13 @@
         },
         {
           "properties": {
+            "accountLabel": {
+              "description": "Insert successful credentials under this local label instead of replacing the active record.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "type": {
               "enum": [
                 "chatgptDeviceCode"
@@ -11471,6 +11678,52 @@
         "v2"
       ],
       "type": "string"
+    },
+    "NamedAccount": {
+      "description": "Metadata for one locally named credential record. Credential material is never included.",
+      "properties": {
+        "accountId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "authMode": {
+          "$ref": "#/definitions/AuthMode"
+        },
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "isActive": {
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string"
+        },
+        "planType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PlanType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "authMode",
+        "id",
+        "isActive",
+        "label"
+      ],
+      "type": "object"
     },
     "NetworkAccess": {
       "enum": [

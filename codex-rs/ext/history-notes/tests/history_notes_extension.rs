@@ -19,7 +19,6 @@ use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_history_notes_extension::install;
-use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -30,8 +29,6 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TruncationPolicy;
-use http::HeaderMap;
-use http::HeaderValue;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::TempDir;
@@ -50,7 +47,7 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/backend-api/codex/alpha/notes/v2/read_file"))
-        .and(header("x-openai-actor-authorization", "actor-biscuit"))
+        .and(header("authorization", "Bearer Access Token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "encrypted_output": "enc_payload"
         })))
@@ -58,7 +55,7 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         .await;
     Mock::given(method("POST"))
         .and(path("/backend-api/codex/alpha/notes/v2/thread_hint"))
-        .and(header("x-openai-actor-authorization", "actor-biscuit"))
+        .and(header("authorization", "Bearer Access Token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"text": THREAD_HINT})))
         .mount(&server)
         .await;
@@ -74,13 +71,8 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
         ..TokenBudgetConfig::default()
     });
 
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "x-openai-actor-authorization",
-        HeaderValue::from_static("actor-biscuit"),
-    );
     let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::Headers(AuthHeaders::new(headers)));
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let mut builder = ExtensionRegistryBuilder::<Config>::new();
     install(&mut builder, auth_manager);
     let registry = builder.build();
@@ -249,7 +241,7 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
             .and(path(format!(
                 "/backend-api/codex/alpha/{namespace}/v2/{name}"
             )))
-            .and(header("x-openai-actor-authorization", "actor-biscuit"))
+            .and(header("authorization", "Bearer Access Token"))
             .respond_with(ResponseTemplate::new(200).set_body_json(response))
             .mount(&server)
             .await;
@@ -299,7 +291,7 @@ async fn installed_extension_exposes_and_invokes_history_notes_tools() -> TestRe
     ]);
     Mock::given(method("POST"))
         .and(path("/backend-api/codex/alpha/history/v2/read_item"))
-        .and(header("x-openai-actor-authorization", "actor-biscuit"))
+        .and(header("authorization", "Bearer Access Token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(response))
         .mount(&server)
         .await;
@@ -423,6 +415,7 @@ fn exposed_tools(
 
 fn tool_call(tool_name: ToolName, arguments: serde_json::Value) -> ToolCall<'static> {
     ToolCall {
+        account_scope: CodexAuth::create_dummy_chatgpt_auth_for_testing().account_scope(),
         turn_id: "turn-1".to_string(),
         call_id: "call-read-file".to_string(),
         tool_name,

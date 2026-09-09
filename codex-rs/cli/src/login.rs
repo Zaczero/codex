@@ -15,6 +15,7 @@ use codex_login::AuthKeyringBackendKind;
 use codex_login::AuthManager;
 use codex_login::AuthRouteConfig;
 use codex_login::CLIENT_ID;
+use codex_login::NamedAccountMetadata;
 use codex_login::ServerOptions;
 use codex_login::is_workload_identity_selected;
 use codex_login::login_with_access_token;
@@ -28,6 +29,7 @@ use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
 use std::io::IsTerminal;
 use std::io::Read;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing_appender::non_blocking;
@@ -44,6 +46,171 @@ const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
 const ACCESS_TOKEN_LOGIN_DISABLED_MESSAGE: &str =
     "Access token login is disabled. Use API key login instead.";
 const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+
+fn print_named_accounts(accounts: &[NamedAccountMetadata], json: bool) -> std::io::Result<()> {
+    let mut output = std::io::stdout().lock();
+    if json {
+        writeln!(
+            output,
+            "{}",
+            serde_json::to_string(accounts).map_err(std::io::Error::other)?
+        )?;
+        return Ok(());
+    }
+    if accounts.is_empty() {
+        writeln!(output, "No named accounts.")?;
+        return Ok(());
+    }
+    for account in accounts {
+        let marker = if account.is_active { '*' } else { ' ' };
+        let principal = account
+            .email
+            .as_deref()
+            .or(account.account_id.as_deref())
+            .unwrap_or("no provider identity");
+        writeln!(
+            output,
+            "{marker} {} ({}) — {}",
+            account.label.escape_debug(),
+            account.id.escape_debug(),
+            principal.escape_debug()
+        )?;
+    }
+    Ok(())
+}
+
+pub async fn run_account_list(cli_config_overrides: CliConfigOverrides, json: bool) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    match config.auth_config().list_named_accounts() {
+        Ok(accounts) => {
+            if let Err(err) = print_named_accounts(&accounts, json) {
+                if err.kind() == std::io::ErrorKind::BrokenPipe {
+                    std::process::exit(0);
+                }
+                eprintln!("Error listing accounts: {err}");
+                std::process::exit(1);
+            }
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("Error listing accounts: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+pub async fn run_account_add(
+    cli_config_overrides: CliConfigOverrides,
+    label: String,
+    use_device_code: bool,
+    issuer_base_url: Option<String>,
+    client_id: Option<String>,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        eprintln!("Error adding account: account label must not be empty");
+        std::process::exit(1);
+    }
+    if !config
+        .auth_config()
+        .is_login_method_allowed(ForcedLoginMethod::Chatgpt)
+    {
+        eprintln!("{CHATGPT_LOGIN_DISABLED_MESSAGE}");
+        std::process::exit(1);
+    }
+    if let Ok(accounts) = config.auth_config().list_named_accounts()
+        && accounts.iter().any(|account| account.label == label)
+    {
+        eprintln!("Error adding account: account label already exists: {label}");
+        std::process::exit(1);
+    }
+
+    let auth_route_config = config.auth_route_config();
+    let mut opts = ServerOptions::new(
+        config.codex_home.to_path_buf(),
+        client_id.unwrap_or(CLIENT_ID.to_string()),
+        config.auth_config().effective_chatgpt_workspaces(),
+        config.cli_auth_credentials_store_mode,
+        config.auth_keyring_backend_kind(),
+        auth_route_config,
+    );
+    opts.named_account_label = Some(label);
+    if let Some(issuer) = issuer_base_url {
+        opts.issuer = issuer;
+    }
+    let result = if use_device_code {
+        run_device_code_login(opts).await
+    } else {
+        match run_login_server(opts) {
+            Ok(server) => {
+                print_login_server_start(server.actual_port, &server.auth_url);
+                server.block_until_done().await
+            }
+            Err(err) => Err(err),
+        }
+    };
+    match result {
+        Ok(()) => {
+            eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("Error adding account: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+pub async fn run_account_rename(
+    cli_config_overrides: CliConfigOverrides,
+    selector: String,
+    label: String,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    match config.auth_config().rename_named_account(&selector, &label) {
+        Ok(account) => {
+            eprintln!("Renamed account {} to {}", account.id, account.label);
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("Error renaming account: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+pub async fn run_account_switch(cli_config_overrides: CliConfigOverrides, selector: String) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    match config.auth_config().switch_named_account(&selector) {
+        Ok(account) => {
+            eprintln!("Switched to account {} ({})", account.label, account.id);
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("Error switching account: {err}");
+            std::process::exit(1);
+        }
+    }
+}
+
+pub async fn run_account_remove(cli_config_overrides: CliConfigOverrides, selector: String) -> ! {
+    let config = load_config_or_exit(cli_config_overrides).await;
+    match config.auth_config().remove_named_account(&selector).await {
+        Ok(true) => {
+            eprintln!("Removed account {selector}");
+            std::process::exit(0);
+        }
+        Ok(false) => {
+            eprintln!("Account was already removed: {selector}");
+            std::process::exit(0);
+        }
+        Err(err) => {
+            eprintln!("Error removing account: {err}");
+            std::process::exit(1);
+        }
+    }
+}
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///

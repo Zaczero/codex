@@ -27,6 +27,7 @@ use std::time::Duration;
 use crate::auth::AuthDotJson;
 use crate::auth::AuthKeyringBackendKind;
 use crate::auth::save_auth;
+use crate::auth::save_named_account;
 use crate::callback_params::LoginCallbackResult;
 use crate::callback_params::login_callback_result_from_state;
 use crate::default_client::create_raw_auth_client;
@@ -80,6 +81,8 @@ pub struct ServerOptions {
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub auth_keyring_backend_kind: AuthKeyringBackendKind,
     pub auth_route_config: AuthRouteConfig,
+    /// Optional label for inserting successful OAuth credentials into the named bank.
+    pub named_account_label: Option<String>,
 }
 
 impl ServerOptions {
@@ -105,6 +108,7 @@ impl ServerOptions {
             cli_auth_credentials_store_mode,
             auth_keyring_backend_kind,
             auth_route_config,
+            named_account_label: None,
         }
     }
 }
@@ -442,6 +446,7 @@ async fn process_request(
                         tokens.refresh_token.clone(),
                         opts.cli_auth_credentials_store_mode,
                         opts.auth_keyring_backend_kind,
+                        opts.named_account_label.as_deref(),
                     )
                     .await
                     {
@@ -883,6 +888,10 @@ pub(crate) async fn exchange_code_for_tokens(
 }
 
 /// Persists exchanged credentials using the configured local auth store.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "persists the OAuth exchange payload with its storage destination"
+)]
 pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
@@ -891,9 +900,11 @@ pub(crate) async fn persist_tokens_async(
     refresh_token: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
+    named_account_label: Option<&str>,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
+    let named_account_label = named_account_label.map(str::to_owned);
     tokio::task::spawn_blocking(move || {
         let mut tokens = TokenData {
             id_token: parse_chatgpt_jwt_claims(&id_token).map_err(io::Error::other)?,
@@ -917,12 +928,22 @@ pub(crate) async fn persist_tokens_async(
             bedrock_api_key: None,
             bedrock_access_keys: None,
         };
-        save_auth(
-            &codex_home,
-            &auth,
-            auth_credentials_store_mode,
-            keyring_backend_kind,
-        )
+        match named_account_label.as_deref() {
+            Some(label) => save_named_account(
+                &codex_home,
+                label,
+                &auth,
+                auth_credentials_store_mode,
+                keyring_backend_kind,
+            )
+            .map(|_| ()),
+            None => save_auth(
+                &codex_home,
+                &auth,
+                auth_credentials_store_mode,
+                keyring_backend_kind,
+            ),
+        }
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?

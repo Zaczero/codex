@@ -161,10 +161,7 @@ async fn managed_reviewers_reuse_fork_and_resume_after_parent_shutdown() -> Resu
     assert_ne!(concurrent_ids[0], concurrent_ids[1]);
     assert!(concurrent_ids.contains(&&seed["client_metadata"]["thread_id"]));
     for review in [&seed, &first, &second] {
-        assert_eq!(
-            review["prompt_cache_key"],
-            format!("guardian:{}", parent.id)
-        );
+        assert_eq!(review["prompt_cache_key"], seed["prompt_cache_key"]);
         let metadata: Value = serde_json::from_str(
             review["client_metadata"]["x-codex-turn-metadata"]
                 .as_str()

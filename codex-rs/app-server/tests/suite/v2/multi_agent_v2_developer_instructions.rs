@@ -137,12 +137,16 @@ async fn spawned_subagents_apply_configured_developer_instruction_precedence(
         },
         responses::sse(vec![
             responses::ev_response_created("parent-spawn"),
-            responses::ev_function_call_with_namespace(
-                SPAWN_CALL_ID,
-                NAMESPACE,
-                "spawn_agent",
-                &serde_json::to_string(&spawn_args)?,
-            ),
+            {
+                let mut event = responses::ev_function_call_with_namespace(
+                    SPAWN_CALL_ID,
+                    NAMESPACE,
+                    "spawn_agent",
+                    &serde_json::to_string(&spawn_args)?,
+                );
+                event["item"]["encrypted_function_args"] = json!([]);
+                event
+            },
             responses::ev_completed("parent-spawn"),
         ]),
     )
@@ -568,12 +572,16 @@ async fn cold_resume_preserves_effective_developer_instructions_for_worker(
         },
         responses::sse(vec![
             responses::ev_response_created("initial-parent-spawn"),
-            responses::ev_function_call_with_namespace(
-                SPAWN_CALL_ID,
-                NAMESPACE,
-                "spawn_agent",
-                &serde_json::to_string(&spawn_args)?,
-            ),
+            {
+                let mut event = responses::ev_function_call_with_namespace(
+                    SPAWN_CALL_ID,
+                    NAMESPACE,
+                    "spawn_agent",
+                    &serde_json::to_string(&spawn_args)?,
+                );
+                event["item"]["encrypted_function_args"] = json!([]);
+                event
+            },
             responses::ev_completed("initial-parent-spawn"),
         ]),
     )
@@ -769,15 +777,19 @@ features.shell_tool = false
         },
         responses::sse(vec![
             responses::ev_response_created("resumed-parent-followup"),
-            responses::ev_function_call_with_namespace(
-                FOLLOWUP_CALL_ID,
-                NAMESPACE,
-                "followup_task",
-                &serde_json::to_string(&json!({
-                    "target": "worker",
-                    "message": FOLLOWUP_TASK,
-                }))?,
-            ),
+            {
+                let mut event = responses::ev_function_call_with_namespace(
+                    FOLLOWUP_CALL_ID,
+                    NAMESPACE,
+                    "followup_task",
+                    &serde_json::to_string(&json!({
+                        "target": "worker",
+                        "message": FOLLOWUP_TASK,
+                    }))?,
+                );
+                event["item"]["encrypted_function_args"] = json!([]);
+                event
+            },
             responses::ev_completed("resumed-parent-followup"),
         ]),
     )

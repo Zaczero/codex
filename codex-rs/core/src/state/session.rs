@@ -2,7 +2,6 @@
 
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructionsProvenance;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
@@ -27,7 +26,6 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TokenUsageRecord;
 use codex_protocol::protocol::TurnContextItem;
-use codex_utils_output_truncation::TruncationPolicy;
 use tokio_util::task::AbortOnDropHandle;
 
 /// Runtime request effort. A successful compaction can establish a fresh baseline, while
@@ -132,15 +130,6 @@ impl SessionState {
         }
     }
 
-    // History helpers
-    pub(crate) fn record_items<I>(&mut self, items: I, policy: TruncationPolicy)
-    where
-        I: IntoIterator,
-        I::Item: std::ops::Deref<Target = ResponseItem>,
-    {
-        self.history.record_items(items, policy);
-    }
-
     pub(crate) fn previous_turn_settings(&self) -> Option<PreviousTurnSettings> {
         self.previous_turn_settings.clone()
     }
@@ -168,7 +157,7 @@ impl SessionState {
     #[cfg(test)]
     pub(crate) fn replace_history(
         &mut self,
-        items: Vec<ResponseItem>,
+        items: Vec<codex_protocol::models::ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
     ) {
         self.history.replace(items);

@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::File;
@@ -62,6 +63,131 @@ pub struct AuthDotJson {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bedrock_access_keys: Option<BedrockAccessKeysAuth>,
+}
+
+/// Stable local identity for the account imported from the pre-bank auth format.
+///
+/// This value is deliberately not derived from provider account metadata: old auth files may not
+/// contain a provider workspace ID, and every process must still agree on the imported record.
+pub(super) const LEGACY_ACCOUNT_ID: &str = "legacy";
+const AUTH_BANK_VERSION: u8 = 1;
+const AUTH_CHANGE_FILE: &str = "auth.change";
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub(super) struct StoredAuthAccount {
+    pub(super) label: String,
+    pub(super) auth: AuthDotJson,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub(super) struct StoredAuthBank {
+    pub(super) version: u8,
+    pub(super) selected_account_id: Option<String>,
+    pub(super) accounts: BTreeMap<String, StoredAuthAccount>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct StoredAuthSnapshot {
+    pub(super) account_id: String,
+    pub(super) label: String,
+    pub(super) auth: AuthDotJson,
+}
+
+impl StoredAuthBank {
+    fn empty() -> Self {
+        Self {
+            version: AUTH_BANK_VERSION,
+            selected_account_id: None,
+            accounts: BTreeMap::new(),
+        }
+    }
+
+    pub(super) fn from_legacy(auth: AuthDotJson) -> Self {
+        let mut accounts = BTreeMap::new();
+        accounts.insert(
+            LEGACY_ACCOUNT_ID.to_string(),
+            StoredAuthAccount {
+                label: "default".to_string(),
+                auth,
+            },
+        );
+        Self {
+            version: AUTH_BANK_VERSION,
+            selected_account_id: Some(LEGACY_ACCOUNT_ID.to_string()),
+            accounts,
+        }
+    }
+
+    pub(super) fn selected(&self) -> Option<StoredAuthSnapshot> {
+        let account_id = self.selected_account_id.as_ref()?;
+        let account = self.accounts.get(account_id)?;
+        Some(StoredAuthSnapshot {
+            account_id: account_id.clone(),
+            label: account.label.clone(),
+            auth: account.auth.clone(),
+        })
+    }
+
+    pub(super) fn snapshot(&self, account_id: &str) -> Option<StoredAuthSnapshot> {
+        let account = self.accounts.get(account_id)?;
+        Some(StoredAuthSnapshot {
+            account_id: account_id.to_string(),
+            label: account.label.clone(),
+            auth: account.auth.clone(),
+        })
+    }
+}
+
+fn decode_stored_bank(serialized: &str) -> std::io::Result<StoredAuthBank> {
+    let value: serde_json::Value = serde_json::from_str(serialized)?;
+    if ["version", "accounts", "selected_account_id"]
+        .iter()
+        .any(|key| value.get(key).is_some())
+    {
+        let bank: StoredAuthBank = serde_json::from_value(value)?;
+        if bank.version != AUTH_BANK_VERSION {
+            return Err(std::io::Error::other(format!(
+                "unsupported authentication bank version: {}",
+                bank.version
+            )));
+        }
+        if bank
+            .selected_account_id
+            .as_ref()
+            .is_some_and(|id| !bank.accounts.contains_key(id))
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "selected authentication account does not exist",
+            ));
+        }
+        let mut labels = std::collections::BTreeSet::new();
+        for (id, account) in &bank.accounts {
+            if id.is_empty()
+                || account.label.is_empty()
+                || account.label.trim() != account.label
+                || !labels.insert(&account.label)
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "authentication bank contains an invalid ID or a non-unique, non-normalized label",
+                ));
+            }
+        }
+        return Ok(bank);
+    }
+    let auth = serde_json::from_value(value).map_err(|error| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, InvalidLegacyAuth(error))
+    })?;
+    Ok(StoredAuthBank::from_legacy(auth))
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid legacy authentication: {0}")]
+struct InvalidLegacyAuth(serde_json::Error);
+
+fn encode_stored_bank(bank: &StoredAuthBank) -> std::io::Result<String> {
+    serde_json::to_string_pretty(bank).map_err(std::io::Error::other)
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -165,8 +291,8 @@ pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> 
 }
 
 pub(super) trait AuthStorageBackend: Debug + Send + Sync {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>>;
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()>;
+    fn load(&self) -> std::io::Result<Option<StoredAuthBank>>;
+    fn save(&self, bank: &StoredAuthBank) -> std::io::Result<()>;
     fn delete(&self) -> std::io::Result<bool>;
 }
 
@@ -183,6 +309,23 @@ enum StorageLock {
 }
 
 static EPHEMERAL_AUTH_TRANSACTION: Mutex<()> = Mutex::new(());
+static EPHEMERAL_ACCOUNT_LOCKS: Lazy<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+pub(super) enum AccountRefreshLock {
+    Persistent {
+        _file: File,
+    },
+    Ephemeral {
+        _guard: tokio::sync::OwnedMutexGuard<()>,
+    },
+}
+
+impl Debug for AccountRefreshLock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountRefreshLock").finish_non_exhaustive()
+    }
+}
 
 impl AuthStorage {
     fn transaction<T>(
@@ -191,7 +334,11 @@ impl AuthStorage {
     ) -> std::io::Result<T> {
         match &self.lock {
             StorageLock::Persistent(codex_home) => {
-                std::fs::create_dir_all(codex_home)?;
+                // A home that does not exist holds nothing to serialize against; a write
+                // creates it, and a read must not leave an empty home behind.
+                if !codex_home.is_dir() {
+                    return action(self.backend.as_ref());
+                }
                 let mut options = OpenOptions::new();
                 options.read(true).write(true).create(true).truncate(false);
                 #[cfg(unix)]
@@ -211,43 +358,81 @@ impl AuthStorage {
     }
 
     pub(super) fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        self.transaction(|backend| backend.load())
-    }
-
-    pub(super) fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        self.transaction(|backend| backend.save(auth))
-    }
-
-    pub(super) fn delete(&self) -> std::io::Result<bool> {
-        self.transaction(|backend| backend.delete())
-    }
-
-    pub(super) fn replace_if_unchanged(
-        &self,
-        expected: &AuthDotJson,
-        updated: &AuthDotJson,
-    ) -> std::io::Result<()> {
         self.transaction(|backend| {
-            if backend.load()?.as_ref() != Some(expected) {
-                return Err(std::io::Error::other(
-                    "Authentication changed while credentials were being updated; retry with the current account.",
-                ));
-            }
-            backend.save(updated)
+            Ok(backend
+                .load()?
+                .and_then(|bank| bank.selected().map(|snapshot| snapshot.auth)))
         })
     }
 
-    pub(super) fn refresh_tokens(
+    pub(super) fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+        self.mutate(|backend| {
+            let mut bank = match backend.load() {
+                Ok(bank) => bank.unwrap_or_else(StoredAuthBank::empty),
+                // Explicit login can replace a broken single-account payload, never a broken bank.
+                Err(error) if error.get_ref().is_some_and(<dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static >::is::<InvalidLegacyAuth>) => {
+                    StoredAuthBank::empty()
+                }
+                Err(error) => return Err(error),
+            };
+            if let Some(selected_account_id) = bank.selected_account_id.as_ref()
+                && let Some(account) = bank.accounts.get_mut(selected_account_id)
+            {
+                account.auth = auth.clone();
+            } else {
+                let account_id = new_account_id(&bank.accounts);
+                let label = unique_default_label(&bank);
+                bank.accounts.insert(
+                    account_id.clone(),
+                    StoredAuthAccount { label, auth: auth.clone() },
+                );
+                bank.selected_account_id = Some(account_id);
+            }
+            backend.save(&bank)
+        })
+    }
+
+    pub(super) fn delete(&self) -> std::io::Result<bool> {
+        self.update_bank(|bank| {
+            let Some(account_id) = bank.selected_account_id.take() else {
+                return Ok(false);
+            };
+            Ok(bank.accounts.remove(&account_id).is_some())
+        })
+    }
+
+    pub(super) fn replace_if_unchanged_for_account(
         &self,
+        account_id: &str,
+        expected: &AuthDotJson,
+        updated: &AuthDotJson,
+    ) -> std::io::Result<()> {
+        self.update_bank(|bank| {
+            let account = bank.accounts.get_mut(account_id).ok_or_else(|| {
+                std::io::Error::other("Authentication account was removed during an update.")
+            })?;
+            if account.auth != *expected {
+                return Err(std::io::Error::other(
+                    "Authentication changed during an account update; retry with the current account.",
+                ));
+            }
+            account.auth = updated.clone();
+            Ok(())
+        })
+    }
+
+    pub(super) fn refresh_tokens_for_account(
+        &self,
+        account_id: &str,
         expected: &AuthDotJson,
         updated: &AuthDotJson,
     ) -> std::io::Result<AuthDotJson> {
-        self.transaction(|backend| {
-            let mut current = backend.load()?.ok_or_else(|| {
+        self.update_bank(|bank| {
+            let account = bank.accounts.get_mut(account_id).ok_or_else(|| {
                 std::io::Error::other("Authentication was removed during token refresh.")
             })?;
-            // Agent identity enrollment may complete while OAuth refresh is in flight.
-            // Preserve that independent update without accepting different credentials.
+            let mut current = account.auth.clone();
+            // Preserve enrollment that completed while this account's OAuth request was in flight.
             let agent_identity = current.agent_identity.take();
             current.agent_identity.clone_from(&expected.agent_identity);
             if &current != expected {
@@ -257,9 +442,166 @@ impl AuthStorage {
             }
             let mut refreshed = updated.clone();
             refreshed.agent_identity = agent_identity;
-            backend.save(&refreshed)?;
+            account.auth = refreshed.clone();
             Ok(refreshed)
         })
+    }
+
+    fn mutate<T>(
+        &self,
+        action: impl FnOnce(&dyn AuthStorageBackend) -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        let result = self.transaction(action);
+        if result.is_ok() {
+            self.publish_change();
+        }
+        result
+    }
+
+    fn update_bank<T>(
+        &self,
+        action: impl FnOnce(&mut StoredAuthBank) -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        self.mutate(|backend| {
+            let mut bank = backend.load()?.unwrap_or_else(StoredAuthBank::empty);
+            let result = action(&mut bank)?;
+            if bank.accounts.is_empty() {
+                backend.delete()?;
+            } else {
+                backend.save(&bank)?;
+            }
+            Ok(result)
+        })
+    }
+
+    pub(super) fn load_bank(&self) -> std::io::Result<StoredAuthBank> {
+        self.transaction(|backend| Ok(backend.load()?.unwrap_or_else(StoredAuthBank::empty)))
+    }
+
+    pub(super) fn update_bank_with<T>(
+        &self,
+        action: impl FnOnce(&mut StoredAuthBank) -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        self.update_bank(action)
+    }
+
+    pub(super) fn load_account(
+        &self,
+        account_id: &str,
+    ) -> std::io::Result<Option<StoredAuthSnapshot>> {
+        self.transaction(|backend| Ok(backend.load()?.and_then(|bank| bank.snapshot(account_id))))
+    }
+
+    pub(super) fn change_marker(&self) -> std::io::Result<Option<StoredAuthSnapshot>> {
+        // The notification file is only a wakeup. Read the authoritative bank so a missed
+        // notification or a direct credential-file replacement cannot hide an account change.
+        self.transaction(|backend| Ok(backend.load()?.and_then(|bank| bank.selected())))
+    }
+
+    pub(super) async fn acquire_account_lock(
+        &self,
+        account_id: &str,
+    ) -> std::io::Result<AccountRefreshLock> {
+        match &self.lock {
+            StorageLock::Persistent(codex_home) => {
+                let codex_home = codex_home.clone();
+                let account_id = account_id.to_string();
+                tokio::task::spawn_blocking(move || {
+                    std::fs::create_dir_all(&codex_home)?;
+                    let mut options = OpenOptions::new();
+                    options.read(true).write(true).create(true).truncate(false);
+                    #[cfg(unix)]
+                    options.mode(0o600);
+                    let path = account_lock_path(&codex_home, &account_id);
+                    let file = options.open(path)?;
+                    file.lock()?;
+                    Ok(AccountRefreshLock::Persistent { _file: file })
+                })
+                .await
+                .map_err(|err| std::io::Error::other(format!("account lock task failed: {err}")))?
+            }
+            StorageLock::Ephemeral => {
+                let key = account_id.to_string();
+                let lock = {
+                    let mut locks = EPHEMERAL_ACCOUNT_LOCKS.lock().map_err(|_| {
+                        std::io::Error::other("failed to lock ephemeral account locks")
+                    })?;
+                    Arc::clone(
+                        locks
+                            .entry(key)
+                            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+                    )
+                };
+                Ok(AccountRefreshLock::Ephemeral {
+                    _guard: lock.lock_owned().await,
+                })
+            }
+        }
+    }
+
+    fn publish_change(&self) {
+        let StorageLock::Persistent(codex_home) = &self.lock else {
+            return;
+        };
+        if let Err(err) = publish_change(codex_home) {
+            warn!("failed to publish auth change marker: {err}");
+        }
+    }
+}
+
+fn account_lock_path(codex_home: &Path, account_id: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(account_id.as_bytes());
+    codex_home.join(format!(".auth-account-lock-{:x}", hasher.finalize()))
+}
+
+fn publish_change(codex_home: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(codex_home)?;
+    let path = codex_home.join(AUTH_CHANGE_FILE);
+    let temporary = codex_home.join(format!(".auth-change-{:016x}.tmp", rand::random::<u64>()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&temporary)?;
+    let result = (|| {
+        writeln!(file, "{:016x}", rand::random::<u64>())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)?;
+        #[cfg(unix)]
+        File::open(codex_home)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+pub(super) fn new_account_id(accounts: &BTreeMap<String, StoredAuthAccount>) -> String {
+    loop {
+        let id = format!("{:032x}", rand::random::<u128>());
+        if id != LEGACY_ACCOUNT_ID && !accounts.contains_key(&id) {
+            return id;
+        }
+    }
+}
+
+fn unique_default_label(bank: &StoredAuthBank) -> String {
+    if !bank
+        .accounts
+        .values()
+        .any(|account| account.label == "default")
+    {
+        return "default".to_string();
+    }
+    let mut suffix = 2;
+    loop {
+        let label = format!("default-{suffix}");
+        if !bank.accounts.values().any(|account| account.label == label) {
+            return label;
+        }
+        suffix += 1;
     }
 }
 
@@ -272,37 +614,28 @@ impl FileAuthStorage {
     pub(super) fn new(codex_home: PathBuf) -> Self {
         Self { codex_home }
     }
-
-    /// Attempt to read and parse the `auth.json` file in the given `CODEX_HOME` directory.
-    /// Returns the full AuthDotJson structure.
-    pub(super) fn try_read_auth_json(&self, auth_file: &Path) -> std::io::Result<AuthDotJson> {
-        let mut file = File::open(auth_file)?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-        let auth_dot_json: AuthDotJson = serde_json::from_str(&contents)?;
-
-        Ok(auth_dot_json)
-    }
 }
 
 impl AuthStorageBackend for FileAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+    fn load(&self) -> std::io::Result<Option<StoredAuthBank>> {
         let auth_file = get_auth_file(&self.codex_home);
-        let auth_dot_json = match self.try_read_auth_json(&auth_file) {
-            Ok(auth) => auth,
+        let mut file = match File::open(&auth_file) {
+            Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
         };
-        Ok(Some(auth_dot_json))
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        Ok(Some(decode_stored_bank(&contents)?))
     }
 
-    fn save(&self, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
+    fn save(&self, bank: &StoredAuthBank) -> std::io::Result<()> {
         let auth_file = get_auth_file(&self.codex_home);
 
         if let Some(parent) = auth_file.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let json_data = serde_json::to_string_pretty(auth_dot_json)?;
+        let json_data = encode_stored_bank(bank)?;
         let temporary = self
             .codex_home
             .join(format!(".auth-{:016x}.tmp", rand::random::<u64>()));
@@ -357,6 +690,7 @@ fn compute_store_key(codex_home: &Path) -> std::io::Result<String> {
 struct DirectKeyringAuthStorage {
     codex_home: PathBuf,
     keyring_store: Arc<dyn KeyringStore>,
+    store_key: once_cell::sync::OnceCell<String>,
 }
 
 impl DirectKeyringAuthStorage {
@@ -364,16 +698,19 @@ impl DirectKeyringAuthStorage {
         Self {
             codex_home,
             keyring_store,
+            store_key: once_cell::sync::OnceCell::new(),
         }
     }
 
-    fn load_from_keyring(&self, key: &str) -> std::io::Result<Option<AuthDotJson>> {
+    fn store_key(&self) -> std::io::Result<&str> {
+        self.store_key
+            .get_or_try_init(|| compute_store_key(&self.codex_home))
+            .map(String::as_str)
+    }
+
+    fn load_from_keyring(&self, key: &str) -> std::io::Result<Option<String>> {
         match self.keyring_store.load(KEYRING_SERVICE, key) {
-            Ok(Some(serialized)) => serde_json::from_str(&serialized).map(Some).map_err(|err| {
-                std::io::Error::other(format!(
-                    "failed to deserialize CLI auth from keyring: {err}"
-                ))
-            }),
+            Ok(Some(serialized)) => Ok(Some(serialized)),
             Ok(None) => Ok(None),
             Err(error) => Err(std::io::Error::other(format!(
                 "failed to load CLI auth from keyring: {}",
@@ -398,16 +735,19 @@ impl DirectKeyringAuthStorage {
 }
 
 impl AuthStorageBackend for DirectKeyringAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        let key = compute_store_key(&self.codex_home)?;
-        self.load_from_keyring(&key)
+    fn load(&self) -> std::io::Result<Option<StoredAuthBank>> {
+        let key = self.store_key()?;
+        match self.load_from_keyring(key)? {
+            Some(serialized) => decode_stored_bank(&serialized).map(Some),
+            None => Ok(None),
+        }
     }
 
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        let key = compute_store_key(&self.codex_home)?;
+    fn save(&self, bank: &StoredAuthBank) -> std::io::Result<()> {
+        let key = self.store_key()?;
         // Simpler error mapping per style: prefer method reference over closure
-        let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
-        self.save_to_keyring(&key, &serialized)?;
+        let serialized = encode_stored_bank(bank)?;
+        self.save_to_keyring(key, &serialized)?;
         if let Err(err) = delete_file_if_exists(&self.codex_home) {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
@@ -415,10 +755,10 @@ impl AuthStorageBackend for DirectKeyringAuthStorage {
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        let key = compute_store_key(&self.codex_home)?;
+        let key = self.store_key()?;
         let keyring_removed = self
             .keyring_store
-            .delete(KEYRING_SERVICE, &key)
+            .delete(KEYRING_SERVICE, key)
             .map_err(|err| {
                 std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
             })?;
@@ -461,7 +801,7 @@ impl SecretsKeyringAuthStorage {
 }
 
 impl AuthStorageBackend for SecretsKeyringAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+    fn load(&self) -> std::io::Result<Option<StoredAuthBank>> {
         match self
             .secrets_manager
             .get(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME)
@@ -470,7 +810,7 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
                     "failed to load CLI auth from encrypted auth storage: {err}"
                 ))
             })? {
-            Some(serialized) => serde_json::from_str(&serialized).map(Some).map_err(|err| {
+            Some(serialized) => decode_stored_bank(&serialized).map(Some).map_err(|err| {
                 std::io::Error::other(format!(
                     "failed to deserialize CLI auth from encrypted auth storage: {err}"
                 ))
@@ -479,8 +819,8 @@ impl AuthStorageBackend for SecretsKeyringAuthStorage {
         }
     }
 
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
+    fn save(&self, bank: &StoredAuthBank) -> std::io::Result<()> {
+        let serialized = encode_stored_bank(bank)?;
         self.secrets_manager
             .set(&SecretScope::Global, &CODEX_AUTH_SECRET_NAME, &serialized)
             .map_err(|err| {
@@ -534,7 +874,7 @@ impl AutoAuthStorage {
 }
 
 impl AuthStorageBackend for AutoAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+    fn load(&self) -> std::io::Result<Option<StoredAuthBank>> {
         match self.keyring_storage.load() {
             Ok(Some(auth)) => Ok(Some(auth)),
             Ok(None) => self.file_storage.load(),
@@ -545,12 +885,12 @@ impl AuthStorageBackend for AutoAuthStorage {
         }
     }
 
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        match self.keyring_storage.save(auth) {
+    fn save(&self, bank: &StoredAuthBank) -> std::io::Result<()> {
+        match self.keyring_storage.save(bank) {
             Ok(()) => Ok(()),
             Err(err) => {
                 warn!("failed to save auth to keyring, falling back to file storage: {err}");
-                self.file_storage.save(auth)
+                self.file_storage.save(bank)
             }
         }
     }
@@ -562,7 +902,7 @@ impl AuthStorageBackend for AutoAuthStorage {
 }
 
 // A global in-memory store for mapping codex_home -> AuthDotJson.
-static EPHEMERAL_AUTH_STORE: Lazy<Mutex<HashMap<String, AuthDotJson>>> =
+static EPHEMERAL_AUTH_STORE: Lazy<Mutex<HashMap<String, StoredAuthBank>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone, Debug)]
@@ -577,7 +917,7 @@ impl EphemeralAuthStorage {
 
     fn with_store<F, T>(&self, action: F) -> std::io::Result<T>
     where
-        F: FnOnce(&mut HashMap<String, AuthDotJson>, String) -> std::io::Result<T>,
+        F: FnOnce(&mut HashMap<String, StoredAuthBank>, String) -> std::io::Result<T>,
     {
         let key = compute_store_key(&self.codex_home)?;
         let mut store = EPHEMERAL_AUTH_STORE
@@ -588,13 +928,13 @@ impl EphemeralAuthStorage {
 }
 
 impl AuthStorageBackend for EphemeralAuthStorage {
-    fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+    fn load(&self) -> std::io::Result<Option<StoredAuthBank>> {
         self.with_store(|store, key| Ok(store.get(&key).cloned()))
     }
 
-    fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+    fn save(&self, bank: &StoredAuthBank) -> std::io::Result<()> {
         self.with_store(|store, key| {
-            store.insert(key, auth.clone());
+            store.insert(key, bank.clone());
             Ok(())
         })
     }

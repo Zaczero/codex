@@ -168,15 +168,18 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
     );
     let prompt = Prompt {
-        input: vec![ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "please compact".to_string(),
-            }],
-            phase: None,
-            internal_chat_message_metadata_passthrough: None,
-        }],
+        input: vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "please compact".to_string(),
+                }],
+                phase: None,
+                internal_chat_message_metadata_passthrough: None,
+            }
+            .into(),
+        ],
         base_instructions: BaseInstructions {
             text: "base instructions".to_string(),
             provenance: None,
@@ -207,7 +210,7 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         )
         .await?;
 
-    assert!(output.is_empty());
+    assert!(output.items.is_empty());
     assert_eq!(registration_count.load(Ordering::SeqCst), 3);
     let requests = server
         .received_requests()
@@ -313,6 +316,7 @@ fn responses_lite_prefix_ids_track_thread_and_payload() -> anyhow::Result<()> {
                 /*parent_thread_id*/ None,
                 TestCodexResponsesRequestKind::Turn,
             ),
+            /*account_scope*/ None,
         )
     };
 
@@ -396,6 +400,7 @@ fn reasoning_effort_in_request(
                 /*parent_thread_id*/ None,
                 TestCodexResponsesRequestKind::Turn,
             ),
+            /*account_scope*/ None,
         )
         .expect("build responses request")
         .reasoning

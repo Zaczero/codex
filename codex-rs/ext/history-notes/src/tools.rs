@@ -277,11 +277,14 @@ impl HistoryNotesTool {
                 &self.current_agent_name,
                 arguments,
                 call.truncation_policy,
+                call.account_scope.as_ref(),
             )
             .await
             .map_err(FunctionCallError::RespondToModel)?;
 
-        Ok(Box::new(HistoryNotesToolOutput::new(result)?))
+        let mut output = HistoryNotesToolOutput::new(result.value)?;
+        output.account_scope = result.account_scope;
+        Ok(Box::new(output))
     }
 }
 
@@ -324,6 +327,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryNotesTool {
 }
 
 struct HistoryNotesToolOutput {
+    account_scope: Option<codex_protocol::auth::AccountScope>,
     result: Value,
     output: FunctionCallOutputPayload,
 }
@@ -373,11 +377,18 @@ impl HistoryNotesToolOutput {
             }
             output = FunctionCallOutputPayload::from_content_items(content);
         }
-        Ok(Self { result, output })
+        Ok(Self {
+            result,
+            output,
+            account_scope: None,
+        })
     }
 }
 
 impl ToolOutput for HistoryNotesToolOutput {
+    fn account_scope(&self) -> Option<codex_protocol::auth::AccountScope> {
+        self.account_scope.clone()
+    }
     fn log_output(&self) -> String {
         JsonToolOutput::new(self.result.clone()).log_output()
     }

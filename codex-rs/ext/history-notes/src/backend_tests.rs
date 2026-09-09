@@ -19,6 +19,62 @@ use super::ENCRYPTED_TOOL_ARGUMENTS_HEADER;
 use super::HistoryNotesBackend;
 
 #[tokio::test]
+async fn encrypted_history_arguments_require_the_request_account() {
+    let server = MockServer::start().await;
+    let auth = CodexAuth::from_api_key("request-account");
+    let scope = auth.account_scope();
+    let backend = HistoryNotesBackend::new(create_model_provider(
+        ModelProviderInfo::create_openai_provider(Some(format!(
+            "{}/backend-api/codex",
+            server.uri()
+        ))),
+        Some(AuthManager::from_auth_for_testing(auth)),
+    ));
+    for producer in [
+        None,
+        CodexAuth::from_api_key("other-account").account_scope(),
+    ] {
+        assert!(
+            backend
+                .call(
+                    "alpha/notes/v2/write_file",
+                    "session",
+                    "/root",
+                    json!({"text":"ciphertext"}),
+                    TruncationPolicy::Bytes(1024),
+                    producer.as_ref()
+                )
+                .await
+                .is_err()
+        );
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+    Mock::given(method("POST"))
+        .and(header("authorization", "Bearer request-account"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"encrypted_output":"owned-output"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let response = backend
+        .call(
+            "alpha/notes/v2/write_file",
+            "session",
+            "/root",
+            json!({"text":"ciphertext"}),
+            TruncationPolicy::Bytes(1024),
+            scope.as_ref(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (response.value, response.account_scope),
+        (json!({"encrypted_output":"owned-output"}), scope)
+    );
+}
+
+#[tokio::test]
 async fn routes_through_codex_backend_and_injects_trusted_session_agent_context() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -58,11 +114,12 @@ async fn routes_through_codex_backend_and_injects_trusted_session_agent_context(
                 }
             }),
             TruncationPolicy::Bytes(1024),
+            /*originating_account*/ None,
         )
         .await
         .expect("History request should succeed");
 
-    assert_eq!(response, json!({"encrypted_output": "enc_payload"}));
+    assert_eq!(response.value, json!({"encrypted_output": "enc_payload"}));
     let requests = server.received_requests().await.expect("recorded requests");
     assert_eq!(requests.len(), 1);
     assert!(
@@ -114,8 +171,9 @@ async fn marks_encrypted_history_and_notes_arguments_without_changing_the_json_b
             .await;
     }
 
-    let auth_manager =
-        AuthManager::from_auth_for_testing(CodexAuth::Headers(AuthHeaders::new(HeaderMap::new())));
+    let auth = CodexAuth::from_api_key("test-account");
+    let scope = auth.account_scope();
+    let auth_manager = AuthManager::from_auth_for_testing(auth);
     let backend = HistoryNotesBackend::new(create_model_provider(
         ModelProviderInfo::create_openai_provider(Some(format!(
             "{}/backend-api/codex",
@@ -132,6 +190,7 @@ async fn marks_encrypted_history_and_notes_arguments_without_changing_the_json_b
                 "/root",
                 arguments.clone(),
                 TruncationPolicy::Bytes(1024),
+                scope.as_ref(),
             )
             .await
             .expect("encrypted argument request should succeed");

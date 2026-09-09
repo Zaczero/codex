@@ -559,6 +559,14 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
             {"type": "input_text", "text": "The assistant inspected README.md."},
         ])
     );
+    assert_ne!(
+        requests[0].body_json()["prompt_cache_key"],
+        requests[1].body_json()["prompt_cache_key"]
+    );
+    assert_eq!(
+        requests[1].body_json()["prompt_cache_key"],
+        requests[2].body_json()["prompt_cache_key"]
+    );
     for (index, request) in requests.iter().enumerate() {
         let request = request.body_json();
         assert_eq!(request["type"], "response.create");
@@ -566,7 +574,7 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
         assert_eq!(request["input"][0]["tools"], json!([]));
         assert_eq!(request["tool_choice"], "none");
         assert!(request.get("text").is_none());
-        assert_eq!(request["prompt_cache_key"], "guardian-v2:thread-1");
+        assert!(request["prompt_cache_key"].is_string());
         assert!(request.get("tools").is_none());
         let effort = if index == 1 { "medium" } else { "none" };
         assert_eq!(request["reasoning"]["effort"], effort);
@@ -580,12 +588,24 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
 async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for (parent_hash, luna_hash, should_reuse) in [
-        (Some("compatible"), Some("compatible"), true),
-        (Some("parent"), Some("luna"), false),
-        (None, Some("compatible"), false),
-        (Some("compatible"), None, false),
-        (Some(""), Some(""), false),
+    for (parent_hash, luna_hash, account_key, should_reuse) in [
+        (
+            Some("compatible"),
+            Some("compatible"),
+            Some("test-api-key"),
+            true,
+        ),
+        (
+            Some("compatible"),
+            Some("compatible"),
+            Some("other-account"),
+            false,
+        ),
+        (Some("compatible"), Some("compatible"), None, false),
+        (Some("parent"), Some("luna"), Some("test-api-key"), false),
+        (None, Some("compatible"), Some("test-api-key"), false),
+        (Some("compatible"), None, Some("test-api-key"), false),
+        (Some(""), Some(""), Some("test-api-key"), false),
     ] {
         let events = vec![
             ev_assistant_message("sample", "low"),
@@ -606,7 +626,15 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
             internal_chat_message_metadata_passthrough: None,
         };
         let mut request = sample_request("turn-1");
-        request.parent_compaction = Some(parent_compaction.clone());
+        let parent_envelope = codex_history::ResponseItemEnvelope {
+            item: parent_compaction.clone(),
+            metadata: Some(codex_history::CodexHarnessMetadata {
+                account_scope: account_key
+                    .and_then(|key| CodexAuth::from_api_key(key).account_scope()),
+                ..Default::default()
+            }),
+        };
+        request.parent_compaction = Some(parent_envelope.clone());
         request.parent_compaction_hash = parent_hash.map(str::to_owned);
         request.input.insert(
             /*index*/ 0,
@@ -645,7 +673,7 @@ async fn sampler_reuses_parent_compaction_only_for_matching_model_hashes() -> Re
         assert_eq!(input[4]["role"], "user");
 
         let mut switched_request = sample_request("turn-2");
-        switched_request.parent_compaction = Some(parent_compaction);
+        switched_request.parent_compaction = Some(parent_envelope);
         switched_request.parent_compaction_hash = Some("incompatible".to_owned());
         assert!(matches!(
             sampler.sample(switched_request).await,
@@ -1094,7 +1122,7 @@ async fn sampler_limits_transient_recovery_attempts() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    for free_guardian in [false, true] {
+    for (free_guardian, matching_account) in [(false, true), (true, true), (true, false)] {
         let healthy = responses::start_websocket_server(vec![vec![vec![
             ev_assistant_message("resp-review", "low"),
             ev_completed("resp-review"),
@@ -1118,10 +1146,22 @@ async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> 
                 )),
             );
         }
+        let account_scope = if matching_account {
+            config
+                .provider
+                .auth()
+                .await
+                .and_then(|auth| auth.account_scope())
+        } else {
+            CodexAuth::from_api_key("another-account").account_scope()
+        };
         let sampler = connect_sampler(config).await?;
         let parent_response_id = "resp-parent";
         let mut request = sample_request("turn-1");
-        request.parent_response_id = Some(parent_response_id.to_owned());
+        request.parent_response_id = Some(codex_api::ResponseId {
+            value: parent_response_id.to_owned(),
+            account_scope,
+        });
         assert_eq!(sampler.sample(request).await?, "low");
         for server in [&expired, &healthy] {
             let requests = server.single_connection();
@@ -1132,7 +1172,10 @@ async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> 
                     body["client_metadata"].get("parent_response_id").cloned(),
                     body["client_metadata"].get("guardian_credits_requested"),
                 ),
-                (free_guardian.then(|| json!(parent_response_id)), None)
+                (
+                    (free_guardian && matching_account).then(|| json!(parent_response_id)),
+                    None
+                )
             );
             assert!(!body["input"].to_string().contains(parent_response_id));
         }
