@@ -3867,6 +3867,7 @@ async fn cold_paginated_resume_restores_usage_without_loading_turns() -> Result<
         &path,
         &RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
             info: Some(TokenUsageInfo {
+                auto_compact_percent_used: None,
                 total_token_usage: TokenUsage {
                     input_tokens: 120,
                     output_tokens: 30,
@@ -3948,6 +3949,7 @@ async fn cold_paginated_resume_omits_usage_when_its_turn_is_ambiguous() -> Resul
         &path,
         &RolloutItem::EventMsg(EventMsg::TokenCount(TokenCountEvent {
             info: Some(TokenUsageInfo {
+                auto_compact_percent_used: None,
                 total_token_usage: TokenUsage {
                     total_tokens: 150,
                     ..Default::default()
@@ -4221,6 +4223,7 @@ async fn thread_resume_token_usage_replay_can_belong_to_interrupted_turn() -> Re
             "type": "event_msg",
             "payload": serde_json::to_value(EventMsg::TokenCount(TokenCountEvent {
                 info: Some(TokenUsageInfo {
+                    auto_compact_percent_used: None,
                     total_token_usage: TokenUsage {
                         input_tokens: 180,
                         cached_input_tokens: 40,

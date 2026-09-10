@@ -66,7 +66,7 @@ fn assert_literal_plan_prompt(chat: &ChatWidget, op: Result<Op, TryRecvError>, p
 async fn plan_draft_footer_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_token_info(Some(make_token_info(
-        /*total_tokens*/ 50_000, /*context_window*/ 100_000,
+        /*total_tokens*/ 50_000, /*context_window*/ 100_000, /*percent_used*/ 50,
     )));
     chat.bottom_pane
         .set_composer_text("make a plan".to_string(), Vec::new(), Vec::new());
@@ -105,7 +105,7 @@ async fn plan_implementation_popup_snapshot() {
 async fn plan_implementation_popup_context_usage_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.set_token_info(Some(make_token_info(
-        /*total_tokens*/ 90_000, /*context_window*/ 100_000,
+        /*total_tokens*/ 90_000, /*context_window*/ 100_000, /*percent_used*/ 90,
     )));
     chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
     chat.open_plan_implementation_prompt();

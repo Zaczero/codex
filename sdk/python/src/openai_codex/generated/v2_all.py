@@ -9969,6 +9969,13 @@ class ThreadTokenUsage(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    auto_compact_percent_used: Annotated[
+        int | None,
+        Field(
+            alias="autoCompactPercentUsed",
+            description="Effective automatic-compaction budget used, rounded up and capped at 100 percent.",
+        ),
+    ] = None
     last: TokenUsageBreakdown
     model_context_window: Annotated[int | None, Field(alias="modelContextWindow")] = None
     total: TokenUsageBreakdown

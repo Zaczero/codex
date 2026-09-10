@@ -219,6 +219,15 @@ Likewise, when reviewing code, do not hesitate to push back on PRs that would un
 
 Keep crate API surfaces as small as possible. Avoid proliferating test-only helpers.
 
+### Context usage display
+
+Context usage percentages come from the backend's `auto_compact_percent_used`
+snapshot: scoped usage against the buffered automatic-compaction limit, capped by
+the model's usable window. Round used percentage upward and derive remaining
+percentage as its complement. Keep `model_context_window` as the actual usable
+window size; clients must not reconstruct the compaction threshold from it or
+subtract a fixed prompt baseline.
+
 ### Model visible context
 
 Codex maintains a context (history of messages) that is sent to the model in inference requests.

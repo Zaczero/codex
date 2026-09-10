@@ -57,7 +57,6 @@ const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/codex/settings/usage";
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
-    percent_remaining: i64,
     tokens_in_context: i64,
     window: i64,
 }
@@ -68,6 +67,7 @@ pub(crate) struct StatusTokenUsageData {
     input: i64,
     output: i64,
     context_window: Option<StatusContextWindowData>,
+    auto_compact_percent_used: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -364,7 +364,6 @@ impl StatusHistoryCell {
             None => (&default_usage, config.model_context_window),
         };
         let context_window = context_window.map(|window| StatusContextWindowData {
-            percent_remaining: context_usage.percent_of_context_window_remaining(window),
             tokens_in_context: context_usage.tokens_in_context_window(),
             window,
         });
@@ -374,6 +373,7 @@ impl StatusHistoryCell {
             input: total_usage.non_cached_input(),
             output: total_usage.output_tokens,
             context_window,
+            auto_compact_percent_used: token_info.and_then(TokenUsageInfo::context_percent_used),
         };
         let rate_limits = if rate_limits.len() <= 1 {
             compose_rate_limit_data(rate_limits.first(), now)
@@ -427,17 +427,13 @@ impl StatusHistoryCell {
 
     fn context_window_spans(&self) -> Option<Vec<Span<'static>>> {
         let context = self.token_usage.context_window.as_ref()?;
-        let percent = context.percent_remaining;
         let used_fmt = format_tokens_compact(context.tokens_in_context);
         let window_fmt = format_tokens_compact(context.window);
 
         Some(vec![
-            Span::from(format!("{percent}% left")),
-            Span::from(" (").dim(),
             Span::from(used_fmt).dim(),
             Span::from(" used / ").dim(),
             Span::from(window_fmt).dim(),
-            Span::from(")").dim(),
         ])
     }
 
@@ -804,6 +800,9 @@ impl StatusHistoryCell {
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
         }
+        if self.token_usage.auto_compact_percent_used.is_some() {
+            push_label(&mut labels, &mut seen, "Auto-compaction");
+        }
         self.collect_rate_limit_labels(&rate_limit_state, &mut seen, &mut labels);
         self.thread_usage.push_labels(&mut labels, &mut seen);
 
@@ -891,6 +890,9 @@ impl StatusHistoryCell {
 
         if let Some(spans) = self.context_window_spans() {
             lines.push(formatter.line("Context window", spans));
+        }
+        if let Some(percent) = self.token_usage.auto_compact_percent_used {
+            lines.push(formatter.line("Auto-compaction", vec![format!("{percent}% used").into()]));
         }
 
         lines.extend(self.rate_limit_lines(&rate_limit_state, available_inner_width, &formatter));

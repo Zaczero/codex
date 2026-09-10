@@ -6083,6 +6083,14 @@
     },
     "ThreadTokenUsage": {
       "properties": {
+        "autoCompactPercentUsed": {
+          "description": "Effective automatic-compaction budget used, rounded up and capped at 100 percent.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "last": {
           "$ref": "#/definitions/TokenUsageBreakdown"
         },

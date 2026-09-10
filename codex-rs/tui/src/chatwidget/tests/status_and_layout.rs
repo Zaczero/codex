@@ -60,7 +60,11 @@ async fn token_count_none_resets_context_indicator() {
 
     handle_token_count(
         &mut chat,
-        Some(make_token_info(pre_compact_tokens, context_window)),
+        Some(make_token_info(
+            pre_compact_tokens,
+            context_window,
+            /*percent_used*/ 70,
+        )),
     );
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
 
@@ -104,7 +108,7 @@ async fn resumed_session_hides_unknown_token_usage_until_an_update_arrives() {
     handle_token_count(
         &mut chat,
         Some(make_token_info(
-            /*total_tokens*/ 12_700, /*context_window*/ 13_000,
+            /*total_tokens*/ 12_700, /*context_window*/ 13_000, /*percent_used*/ 70,
         )),
     );
     chat.refresh_status_line();
@@ -162,14 +166,18 @@ async fn context_indicator_shows_used_tokens_when_window_unknown() {
     let auto_compact_limit = 200_000;
     chat.config.model_auto_compact_token_limit = Some(auto_compact_limit);
 
-    // No model window, so the indicator should fall back to showing tokens used.
+    // Old rollouts have no compaction percentage; show active, not cumulative, usage.
     let total_tokens = 106_000;
     let token_usage = TokenUsage {
         total_tokens,
         ..TokenUsage::default()
     };
     let token_info = TokenUsageInfo {
-        total_token_usage: token_usage.clone(),
+        auto_compact_percent_used: None,
+        total_token_usage: TokenUsage {
+            total_tokens: 400_000,
+            ..TokenUsage::default()
+        },
         last_token_usage: token_usage,
         model_context_window: None,
     };
@@ -192,7 +200,7 @@ async fn token_usage_update_uses_runtime_context_window() {
     handle_token_count(
         &mut chat,
         Some(make_token_info(
-            /*total_tokens*/ 0, /*context_window*/ 950_000,
+            /*total_tokens*/ 0, /*context_window*/ 950_000, /*percent_used*/ 0,
         )),
     );
 
@@ -227,6 +235,36 @@ async fn token_usage_update_uses_runtime_context_window() {
     assert!(
         !context_line.contains("1M"),
         "expected /status to avoid raw config context window, got: {context_line}"
+    );
+}
+
+#[tokio::test]
+async fn context_percentage_uses_backend_compaction_progress() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.model_context_window = Some(1_000_000);
+    chat.config.model_auto_compact_token_limit = Some(500_000);
+    chat.local_settings.tui.status_line =
+        Some(vec!["context-used".into(), "context-remaining".into()]);
+    handle_token_count(
+        &mut chat,
+        Some(make_token_info(
+            /*total_tokens*/ 250_001, /*context_window*/ 950_000,
+            /*percent_used*/ 51,
+        )),
+    );
+    chat.refresh_status_line();
+    assert_eq!(
+        status_line_text(&chat),
+        Some("Context 51% used · Context 49% left".into())
+    );
+    assert_eq!(chat.bottom_pane.context_window_percent(), Some(49));
+    chat.add_status_output(
+        /*refreshing_rate_limits*/ false, /*request_id*/ None,
+    );
+    let cells = drain_insert_history(&mut rx);
+    assert_chatwidget_snapshot!(
+        "status_compaction_progress",
+        lines_to_single_string(cells.last().expect("status"))
     );
 }
 

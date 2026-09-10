@@ -2812,6 +2812,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
     let (mut rollout_items, _expected) = sample_rollout(&session, &turn_context).await;
 
     let info1 = TokenUsageInfo {
+        auto_compact_percent_used: None,
         total_token_usage: TokenUsage {
             input_tokens: 10,
             cached_input_tokens: 0,
@@ -2833,6 +2834,7 @@ async fn record_initial_history_seeds_token_info_from_rollout() {
         model_context_window: Some(1_000),
     };
     let info2 = TokenUsageInfo {
+        auto_compact_percent_used: None,
         total_token_usage: TokenUsage {
             input_tokens: 100,
             cached_input_tokens: 50,
@@ -2984,6 +2986,7 @@ async fn recompute_token_usage_updates_model_context_window() {
     {
         let mut state = session.state.lock().await;
         state.set_token_info(Some(TokenUsageInfo {
+            auto_compact_percent_used: None,
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
@@ -3096,6 +3099,7 @@ async fn record_token_usage_info_notifies_extension_contributors() {
             thread_level_id: session.thread_id.to_string(),
             turn_level_id: turn_context.sub_id.clone(),
             token_usage: TokenUsageInfo {
+                auto_compact_percent_used: None,
                 total_token_usage: first_usage.clone(),
                 last_token_usage: first_usage,
                 model_context_window: turn_context.model_context_window(),
@@ -3108,6 +3112,7 @@ async fn record_token_usage_info_notifies_extension_contributors() {
             thread_level_id: session.thread_id.to_string(),
             turn_level_id: turn_context.sub_id.clone(),
             token_usage: TokenUsageInfo {
+                auto_compact_percent_used: None,
                 total_token_usage: expected_total_usage,
                 last_token_usage: second_usage,
                 model_context_window: turn_context.model_context_window(),
@@ -11995,6 +12000,7 @@ async fn abort_empty_active_turn_preserves_pending_input() {
 async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
     let mut state = sess.state.lock().await;
     state.set_token_info(Some(TokenUsageInfo {
+        auto_compact_percent_used: None,
         total_token_usage,
         last_token_usage: TokenUsage::default(),
         model_context_window: None,

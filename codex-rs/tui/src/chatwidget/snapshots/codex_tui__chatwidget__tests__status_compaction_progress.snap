@@ -1,6 +1,6 @@
 ---
-source: tui/src/status/tests.rs
-expression: sanitized
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: "lines_to_single_string(cells.last().expect(\"status\"))"
 ---
 /status
 
@@ -10,12 +10,14 @@ expression: sanitized
 │ Visit https://chatgpt.com/codex/settings/usage for up-to-date      │
 │ information on rate limits and credits                             │
 │                                                                    │
-│  Model:            gpt-5.1-codex-max (reasoning high, summaries de │
-│  Directory: [[workspace]]                                          │
-│  Permissions:      Custom (workspace with network access, Ask for  │
-│  Agents.md:        <none>                                          │
+│  Model:                gpt-5.6-sol (reasoning low, summaries auto) │
+│  Directory:            /tmp/project                                │
+│  Permissions:          Read Only (Ask for approval)                │
+│  Agents.md:            <none>                                      │
+│  Collaboration mode:   Default                                     │
 │                                                                    │
-│  Token usage:      1.9K total  (1K input + 900 output)             │
-│  Context window:   2.25K used / 272K                               │
-│  5h limit:         [██████░░░░░░░░░░░░░░] 28% left (resets 03:14)  │
+│  Token usage:          0 total  (0 input + 0 output)               │
+│  Context window:       250K used / 950K                            │
+│  Auto-compaction:      51% used                                    │
+│  Limits:               data not available yet                      │
 ╰────────────────────────────────────────────────────────────────────╯

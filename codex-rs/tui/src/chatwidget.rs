@@ -949,6 +949,7 @@ fn request_permissions_from_params(
 
 fn token_usage_info_from_app_server(token_usage: ThreadTokenUsage) -> TokenUsageInfo {
     TokenUsageInfo {
+        auto_compact_percent_used: token_usage.auto_compact_percent_used,
         total_token_usage: TokenUsage {
             total_tokens: token_usage.total.total_tokens,
             input_tokens: token_usage.total.input_tokens,
@@ -1150,17 +1151,10 @@ impl ChatWidget {
         self.token_usage_pending = false;
         self.bottom_pane
             .set_context_window_pending(/*pending*/ false);
-        let percent = self.context_remaining_percent(&info);
+        let percent = info.context_percent_remaining();
         let used_tokens = self.context_used_tokens(&info, percent.is_some());
         self.bottom_pane.set_context_window(percent, used_tokens);
         self.token_info = Some(info);
-    }
-
-    fn context_remaining_percent(&self, info: &TokenUsageInfo) -> Option<i64> {
-        info.model_context_window.map(|window| {
-            info.last_token_usage
-                .percent_of_context_window_remaining(window)
-        })
     }
 
     fn context_used_tokens(&self, info: &TokenUsageInfo, percent_known: bool) -> Option<i64> {
@@ -1168,7 +1162,7 @@ impl ChatWidget {
             return None;
         }
 
-        Some(info.total_token_usage.tokens_in_context_window())
+        Some(info.last_token_usage.tokens_in_context_window())
     }
 
     fn restore_pre_review_token_info(&mut self) {

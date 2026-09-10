@@ -2287,6 +2287,10 @@ pub struct TokenUsageRecord {
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    /// Effective automatic-compaction budget used, rounded up and capped at 100 percent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null")]
+    pub auto_compact_percent_used: Option<i64>,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
@@ -2307,6 +2311,7 @@ impl TokenUsageInfo {
             None => Self {
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
+                auto_compact_percent_used: None,
                 model_context_window,
             },
         };
@@ -2314,6 +2319,9 @@ impl TokenUsageInfo {
             info.append_last_usage(last);
         }
         if let Some(model_context_window) = model_context_window {
+            if info.model_context_window != Some(model_context_window) {
+                info.auto_compact_percent_used = None;
+            }
             info.model_context_window = Some(model_context_window);
         }
         Some(info)
@@ -2322,9 +2330,11 @@ impl TokenUsageInfo {
     pub fn append_last_usage(&mut self, last: &TokenUsage) {
         self.total_token_usage.add_assign(last);
         self.last_token_usage = last.clone();
+        self.auto_compact_percent_used = None;
     }
 
     pub fn fill_to_context_window(&mut self, context_window: i64) {
+        self.auto_compact_percent_used = Some(100);
         let previous_total = self.total_token_usage.total_tokens;
         let delta = (context_window - previous_total).max(0);
 
@@ -2343,6 +2353,7 @@ impl TokenUsageInfo {
         let mut info = Self {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
+            auto_compact_percent_used: None,
             model_context_window: Some(context_window),
         };
         info.fill_to_context_window(context_window);
@@ -2426,9 +2437,6 @@ pub struct SpendControlLimitSnapshot {
     pub resets_at: i64,
 }
 
-// Includes prompts, tools and space to call compact.
-const BASELINE_TOKENS: i64 = 12000;
-
 impl TokenUsage {
     pub fn is_zero(&self) -> bool {
         self.total_tokens == 0
@@ -2449,29 +2457,6 @@ impl TokenUsage {
 
     pub fn tokens_in_context_window(&self) -> i64 {
         self.total_tokens
-    }
-
-    /// Estimate the remaining user-controllable percentage of the model's context window.
-    ///
-    /// `context_window` is the total size of the model's context window.
-    /// `BASELINE_TOKENS` should capture tokens that are always present in
-    /// the context (e.g., system prompt and fixed tool instructions) so that
-    /// the percentage reflects the portion the user can influence.
-    ///
-    /// This normalizes both the numerator and denominator by subtracting the
-    /// baseline, so immediately after the first prompt the UI shows 100% left
-    /// and trends toward 0% as the user fills the effective window.
-    pub fn percent_of_context_window_remaining(&self, context_window: i64) -> i64 {
-        if context_window <= BASELINE_TOKENS {
-            return 0;
-        }
-
-        let effective_window = context_window - BASELINE_TOKENS;
-        let used = (self.tokens_in_context_window() - BASELINE_TOKENS).max(0);
-        let remaining = (effective_window - used).max(0);
-        ((remaining as f64 / effective_window as f64) * 100.0)
-            .clamp(0.0, 100.0)
-            .round() as i64
     }
 
     /// In-place element-wise sum of token counts.
@@ -6328,6 +6313,7 @@ mod tests {
     #[test]
     fn token_usage_info_new_or_append_updates_context_window_when_provided() {
         let initial = Some(TokenUsageInfo {
+            auto_compact_percent_used: None,
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
@@ -6351,6 +6337,7 @@ mod tests {
     #[test]
     fn token_usage_info_new_or_append_preserves_context_window_when_not_provided() {
         let initial = Some(TokenUsageInfo {
+            auto_compact_percent_used: None,
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),

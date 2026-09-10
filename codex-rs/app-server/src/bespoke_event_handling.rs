@@ -3851,6 +3851,7 @@ mod tests {
         );
 
         let info = TokenUsageInfo {
+            auto_compact_percent_used: None,
             total_token_usage: TokenUsage {
                 input_tokens: 100,
                 cached_input_tokens: 25,

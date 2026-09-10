@@ -16,6 +16,16 @@ pub(crate) struct ContextWindowTokenStatus {
     pub(crate) auto_compact_window_prefill_tokens: Option<i64>,
     pub(crate) full_context_window_limit_reached: bool,
     pub(crate) token_limit_reached: bool,
+    pub(crate) auto_compact_percent_used: Option<i64>,
+}
+
+fn used_percent(used: i64, limit: i64) -> i64 {
+    if limit <= 0 {
+        return 100;
+    }
+    let used = i128::from(used.max(0));
+    let limit = i128::from(limit);
+    ((used * 100 + limit - 1) / limit).min(100) as i64
 }
 
 fn tokens_remaining(limit: Option<i64>, used: i64) -> Option<i64> {
@@ -101,6 +111,17 @@ async fn context_window_token_status_with_config(
     let buffered_auto_compact_limit = auto_compact_scope_limit
         .map(|limit| limit.saturating_add(auto_compact_fallback_buffer_tokens));
 
+    let prefix_tokens = active_context_tokens.saturating_sub(auto_compact_scope_tokens);
+    let effective_scope_limit = [
+        buffered_auto_compact_limit,
+        full_context_window_limit.map(|limit| limit.saturating_sub(prefix_tokens)),
+    ]
+    .into_iter()
+    .flatten()
+    .min();
+    let auto_compact_percent_used =
+        effective_scope_limit.map(|limit| used_percent(auto_compact_scope_tokens, limit));
+
     // Force compaction once the buffered window or the model's full context window is reached.
     let full_context_window_limit_reached =
         full_context_window_limit.is_some_and(|limit| active_context_tokens >= limit);
@@ -117,5 +138,10 @@ async fn context_window_token_status_with_config(
         auto_compact_window_prefill_tokens,
         full_context_window_limit_reached,
         token_limit_reached,
+        auto_compact_percent_used,
     }
 }
+
+#[cfg(test)]
+#[path = "context_window_tests.rs"]
+mod tests;

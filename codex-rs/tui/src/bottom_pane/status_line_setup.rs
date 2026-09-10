@@ -98,10 +98,10 @@ pub(crate) enum StatusLineItem {
     #[strum(to_string = "approval-mode", serialize = "approval")]
     ApprovalMode,
 
-    /// Percentage of context window remaining.
+    /// Percentage of the automatic-compaction budget remaining.
     ContextRemaining,
 
-    /// Percentage of context window used.
+    /// Percentage of the automatic-compaction budget used.
     ///
     /// Also accepts the legacy `context-usage` config value.
     #[strum(to_string = "context-used", serialize = "context-usage")]
@@ -178,10 +178,10 @@ impl StatusLineItem {
             StatusLineItem::Permissions => "Active permission profile or sandbox mode",
             StatusLineItem::ApprovalMode => "Active command approval mode",
             StatusLineItem::ContextRemaining => {
-                "Percentage of context window remaining (omitted when unknown)"
+                "Percentage remaining until automatic compaction (omitted when unknown)"
             }
             StatusLineItem::ContextUsed => {
-                "Percentage of context window used (omitted when unknown)"
+                "Percentage used toward automatic compaction, rounded up (omitted when unknown)"
             }
             StatusLineItem::FiveHourLimit => {
                 "Remaining usage on the primary usage limit (omitted when unavailable)"

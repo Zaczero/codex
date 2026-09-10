@@ -24,6 +24,7 @@ use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTokenUsageUpdatedNotification;
 use codex_app_server_protocol::TokenUsageBreakdown;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
@@ -49,6 +50,95 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 const AUTO_COMPACT_LIMIT: i64 = 1_000;
 const COMPACT_PROMPT: &str = "Summarize the conversation.";
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
+
+#[test_case::test_case("total", 250_001, 0, "", 51; "total_rounds_up")]
+#[test_case::test_case("total", 600_000, 0, "", 100; "total_clamps")]
+#[test_case::test_case("body_after_prefix", 600_000, 125_001, "", 36; "body_capped_by_full_window")]
+#[test_case::test_case("body_after_prefix", 100_000, 125_001, "", 26; "body_excludes_prefix")]
+#[test_case::test_case("total", 250_001, 0,
+    "[features.token_budget]\nenabled = true\nauto_compact_fallback_prompt = 'Save notes.'\nauto_compact_fallback_buffer_tokens = 100000", 42;
+    "fallback_buffer")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compaction_percentage_tracks_effective_limit_and_survives_resume(
+    scope: &str,
+    input_tokens: i64,
+    output_tokens: i64,
+    token_budget: &str,
+    expected_percent: i64,
+) -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let mut completed = responses::ev_completed_with_tokens("r1", input_tokens + output_tokens);
+    completed["response"]["usage"]["input_tokens"] = input_tokens.into();
+    completed["response"]["usage"]["output_tokens"] = output_tokens.into();
+    let request = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("m1", "Done."),
+            completed,
+        ]),
+    )
+    .await;
+    let codex_home = TempDir::new()?;
+    let config = core_test_support::load_default_config_for_test(&codex_home).await;
+    let mut model = codex_core::test_support::construct_model_info_offline("mock-model", &config);
+    model.context_window = Some(1_000_000);
+    model.max_context_window = Some(1_000_000);
+    model.effective_context_window_percent = 95;
+    let catalog_path = codex_home.path().join("models.json");
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_vec(&serde_json::json!({"models": [model]}))?,
+    )?;
+    let catalog_path = serde_json::to_string(&catalog_path)?;
+    compaction_config(&server.uri(), /*auto_compact_limit*/ 500_000)
+        .with_root_config(&format!(
+            "model_catalog_json = {catalog_path}\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit_scope = '{scope}'"
+        ))
+        .with_extra_config(token_budget)
+        .write(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let thread_id = start_thread(&mut mcp).await?;
+    send_turn_and_wait(&mut mcp, &thread_id, "hello").await?;
+    let usage: ThreadTokenUsageUpdatedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("thread/tokenUsage/updated"),
+    )
+    .await??;
+    assert_eq!(
+        usage.token_usage.auto_compact_percent_used,
+        Some(expected_percent)
+    );
+    assert_eq!(usage.token_usage.model_context_window, Some(950_000));
+    assert_eq!(
+        usage.token_usage.last.total_tokens,
+        input_tokens + output_tokens
+    );
+    request.single_request();
+    assert!(mcp.shutdown_gracefully().await?.success());
+
+    let mut resumed = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized()
+        .await?;
+    let request_id = resumed
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id,
+            ..Default::default()
+        })
+        .await?;
+    let _: ThreadResumeResponse =
+        timeout(DEFAULT_READ_TIMEOUT, resumed.read_response(request_id)).await??;
+    let replay: ThreadTokenUsageUpdatedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        resumed.read_notification("thread/tokenUsage/updated"),
+    )
+    .await??;
+    assert_eq!(replay.token_usage, usage.token_usage);
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()> {

@@ -4543,6 +4543,7 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             let mut info = state.token_info().unwrap_or(TokenUsageInfo {
+                auto_compact_percent_used: None,
                 total_token_usage: TokenUsage::default(),
                 last_token_usage: TokenUsage::default(),
                 model_context_window: None,
@@ -4607,20 +4608,39 @@ impl Session {
     }
 
     pub(crate) async fn send_token_count_event(&self, turn_context: &TurnContext) {
+        let status = context_window::context_window_token_status(self, turn_context).await;
         let (info, rate_limits) = {
-            let state = self.state.lock().await;
-            state.token_info_and_rate_limits()
+            let mut state = self.state.lock().await;
+            let (mut info, rate_limits) = state.token_info_and_rate_limits();
+            if let Some(info) = &mut info {
+                info.auto_compact_percent_used = status.auto_compact_percent_used;
+            }
+            state.set_token_info(info.clone());
+            (info, rate_limits)
         };
         let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
         self.send_event(turn_context, event).await;
     }
 
     pub(crate) async fn set_total_tokens_full(&self, turn_context: &TurnContext) {
-        if let Some(context_window) = turn_context.model_context_window() {
+        let (info, rate_limits) = {
             let mut state = self.state.lock().await;
-            state.set_token_usage_full(context_window);
-        }
-        self.send_token_count_event(turn_context).await;
+            if let Some(context_window) = turn_context.model_context_window() {
+                state.set_token_usage_full(context_window);
+            }
+            let (mut info, rate_limits) = state.token_info_and_rate_limits();
+            if let Some(info) = &mut info {
+                // A backend context-limit error is authoritative even when local estimates are lower.
+                info.auto_compact_percent_used = Some(100);
+            }
+            state.set_token_info(info.clone());
+            (info, rate_limits)
+        };
+        self.send_event(
+            turn_context,
+            EventMsg::TokenCount(TokenCountEvent { info, rate_limits }),
+        )
+        .await;
     }
 
     pub(crate) async fn record_response_item_and_emit_turn_item(

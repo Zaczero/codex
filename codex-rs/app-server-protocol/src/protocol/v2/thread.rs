@@ -1885,6 +1885,9 @@ impl From<codex_protocol::ResponseUsageMetadata> for ResponseUsageMetadata {
 pub struct ThreadTokenUsage {
     pub total: TokenUsageBreakdown,
     pub last: TokenUsageBreakdown,
+    /// Effective automatic-compaction budget used, rounded up and capped at 100 percent.
+    #[ts(type = "number | null")]
+    pub auto_compact_percent_used: Option<i64>,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
@@ -1895,6 +1898,7 @@ impl From<CoreTokenUsageInfo> for ThreadTokenUsage {
         Self {
             total: value.total_token_usage.into(),
             last: value.last_token_usage.into(),
+            auto_compact_percent_used: value.auto_compact_percent_used,
             model_context_window: value.model_context_window,
         }
     }

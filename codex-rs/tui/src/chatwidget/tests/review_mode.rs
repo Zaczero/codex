@@ -333,12 +333,16 @@ async fn review_restores_context_window_indicator() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let context_window = 13_000;
-    let pre_review_tokens = 12_700; // ~30% remaining after subtracting baseline.
-    let review_tokens = 12_030; // ~97% remaining after subtracting baseline.
+    let pre_review_tokens = 7_000;
+    let review_tokens = 300;
 
     handle_token_count(
         &mut chat,
-        Some(make_token_info(pre_review_tokens, context_window)),
+        Some(make_token_info(
+            pre_review_tokens,
+            context_window,
+            /*percent_used*/ 70,
+        )),
     );
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(30));
 
@@ -346,7 +350,11 @@ async fn review_restores_context_window_indicator() {
 
     handle_token_count(
         &mut chat,
-        Some(make_token_info(review_tokens, context_window)),
+        Some(make_token_info(
+            review_tokens,
+            context_window,
+            /*percent_used*/ 3,
+        )),
     );
     assert_eq!(chat.bottom_pane.context_window_percent(), Some(97));
 
