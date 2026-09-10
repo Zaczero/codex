@@ -15,6 +15,14 @@ rewrite; publish authorized updates with an explicit
 `--force-with-lease=<branch>:<observed-remote-sha>`, never an unconditional force
 push. This history policy does not itself authorize publication.
 
+Replaying a stack that carries generated schema artifacts conflicts on the
+binary precomputed exports at every schema-bearing commit; regenerate them from
+that commit's own source at each stop instead of merging. When a replay stops on
+a conflict, `git rebase --continue` reopens the commit message with default
+cleanup, which strips the `## Why` and `## What changed` headings. Continue with
+`git -c core.commentChar=auto rebase --continue` or restore the message verbatim
+afterwards, and compare the range-diff for lost headings.
+
 ## Fork workflow contracts
 
 Prefer user configuration to fork-specific feature removal. When using the ledger,
