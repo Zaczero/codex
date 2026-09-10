@@ -6106,10 +6106,7 @@ async fn config_resolves_explicit_keyring_auth_store_mode() -> std::io::Result<(
 
     assert_eq!(
         config.cli_auth_credentials_store_mode,
-        resolve_cli_auth_credentials_store_mode(
-            AuthCredentialsStoreMode::Keyring,
-            env!("CARGO_PKG_VERSION"),
-        ),
+        AuthCredentialsStoreMode::Keyring,
     );
 
     Ok(())
@@ -6176,64 +6173,10 @@ async fn config_resolves_default_oauth_store_mode() -> std::io::Result<()> {
 
     assert_eq!(
         config.mcp_oauth_credentials_store_mode,
-        resolve_mcp_oauth_credentials_store_mode(
-            OAuthCredentialsStoreMode::Auto,
-            env!("CARGO_PKG_VERSION"),
-        ),
+        OAuthCredentialsStoreMode::Auto,
     );
 
     Ok(())
-}
-
-#[test]
-fn local_dev_builds_force_file_cli_auth_store_modes() {
-    assert_eq!(
-        resolve_cli_auth_credentials_store_mode(
-            AuthCredentialsStoreMode::Keyring,
-            LOCAL_DEV_BUILD_VERSION,
-        ),
-        AuthCredentialsStoreMode::File,
-    );
-    assert_eq!(
-        resolve_cli_auth_credentials_store_mode(
-            AuthCredentialsStoreMode::Auto,
-            LOCAL_DEV_BUILD_VERSION,
-        ),
-        AuthCredentialsStoreMode::File,
-    );
-    assert_eq!(
-        resolve_cli_auth_credentials_store_mode(
-            AuthCredentialsStoreMode::Ephemeral,
-            LOCAL_DEV_BUILD_VERSION,
-        ),
-        AuthCredentialsStoreMode::Ephemeral,
-    );
-    assert_eq!(
-        resolve_cli_auth_credentials_store_mode(AuthCredentialsStoreMode::Keyring, "1.2.3"),
-        AuthCredentialsStoreMode::Keyring,
-    );
-}
-
-#[test]
-fn local_dev_builds_force_file_mcp_oauth_store_modes() {
-    assert_eq!(
-        resolve_mcp_oauth_credentials_store_mode(
-            OAuthCredentialsStoreMode::Keyring,
-            LOCAL_DEV_BUILD_VERSION,
-        ),
-        OAuthCredentialsStoreMode::File,
-    );
-    assert_eq!(
-        resolve_mcp_oauth_credentials_store_mode(
-            OAuthCredentialsStoreMode::Auto,
-            LOCAL_DEV_BUILD_VERSION,
-        ),
-        OAuthCredentialsStoreMode::File,
-    );
-    assert_eq!(
-        resolve_mcp_oauth_credentials_store_mode(OAuthCredentialsStoreMode::Keyring, "1.2.3"),
-        OAuthCredentialsStoreMode::Keyring,
-    );
 }
 
 #[tokio::test]
@@ -6673,10 +6616,7 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
     .await?;
     assert_eq!(
         final_config.mcp_oauth_credentials_store_mode,
-        resolve_mcp_oauth_credentials_store_mode(
-            OAuthCredentialsStoreMode::Keyring,
-            env!("CARGO_PKG_VERSION"),
-        ),
+        OAuthCredentialsStoreMode::Keyring,
     );
 
     Ok(())
