@@ -693,6 +693,50 @@ fn secrets_keyring_auth_storage_save_persists_and_removes_fallback_file() -> any
 }
 
 #[test]
+fn encrypted_account_changes_are_observed_without_notifications() -> anyhow::Result<()> {
+    let home = tempdir()?;
+    let keyring = Arc::new(MockKeyringStore::default());
+    let writer = create_auth_storage_with_store(
+        home.path().to_path_buf(),
+        AuthCredentialsStoreMode::Keyring,
+        keyring.clone(),
+        AuthKeyringBackendKind::Secrets,
+    );
+    let reader = create_auth_storage_with_store(
+        home.path().to_path_buf(),
+        AuthCredentialsStoreMode::Keyring,
+        keyring,
+        AuthKeyringBackendKind::Secrets,
+    );
+    writer.update_bank_with(|bank| {
+        for id in ["first", "second"] {
+            bank.accounts.insert(
+                id.to_string(),
+                StoredAuthAccount {
+                    label: id.to_string(),
+                    auth: auth_with_prefix(id),
+                },
+            );
+        }
+        bank.selected_account_id = Some("first".to_string());
+        Ok(())
+    })?;
+    let first = writer.load_bank()?;
+    let first_ciphertext = std::fs::read(encrypted_auth_file(home.path()))?;
+    assert_eq!(reader.change_marker()?, first.selected());
+    writer.update_bank_with(|bank| {
+        bank.selected_account_id = Some("second".to_string());
+        Ok(())
+    })?;
+    let second = writer.load_bank()?;
+    assert_eq!(reader.change_marker()?, second.selected());
+    std::fs::write(encrypted_auth_file(home.path()), first_ciphertext)?;
+    assert_eq!(reader.change_marker()?, first.selected());
+    assert_eq!(reader.load_bank()?, first);
+    Ok(())
+}
+
+#[test]
 fn secrets_keyring_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> {
     let codex_home = tempdir()?;
     let mock_keyring = MockKeyringStore::default();

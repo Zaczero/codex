@@ -113,6 +113,10 @@ Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in 
 
 ## NixOS development environment
 
+The local `~/.cargo/bin/codex` is a symlink to this checkout's
+`codex-rs/target/release/codex`. A release build updates the executable used by
+new invocations; preserve the link instead of copying binaries over it.
+
 Run from the repository root to use the pinned Nix packages while retaining the
 repository's rustup toolchain. The login test graph needs OpenSSL, ALSA, libcap,
 and D-Bus development files; the repository formatter also needs DotSlash.
@@ -185,6 +189,15 @@ or during recovery. Unknown producer identity fails closed. Record model,
 compaction, inter-agent, and authenticated tool output provenance before durable
 history; never infer it from the account selected while replaying a rollout.
 Backend response references and transport reuse must use the same account scope.
+
+Check encrypted-auth performance through interactive startup as well as account
+commands. `AuthManager::auth()` reconciles stored credentials on every call, and
+`AuthStorage::change_marker()` reads the authoritative account bank. Local secrets
+use age X25519 with the existing random 256-bit keyring key; password-derived files
+are authenticated and atomically upgraded on first access under the shared secrets
+lock. Keep the keyring encoding stable across namespaces and preserve account-change
+detection. Password stretching and plaintext caches are unnecessary for these
+programmatic keys.
 
 ## The `codex-core` crate
 

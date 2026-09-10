@@ -4431,6 +4431,7 @@ dependencies = [
  "age",
  "anyhow",
  "base64 0.22.1",
+ "bech32",
  "codex-git-utils",
  "codex-keyring-store",
  "keyring",

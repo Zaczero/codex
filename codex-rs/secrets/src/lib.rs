@@ -179,7 +179,7 @@ pub fn environment_id_from_cwd(cwd: &Path) -> String {
     format!("cwd-{short}")
 }
 
-/// Computes the OS keyring account name used to store the local secrets passphrase.
+/// Computes the OS keyring account name used to store the local encryption key.
 pub fn compute_keyring_account(codex_home: &Path) -> String {
     let canonical = codex_home
         .canonicalize()
