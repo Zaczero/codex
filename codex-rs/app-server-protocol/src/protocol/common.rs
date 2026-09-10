@@ -618,6 +618,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadTaskParallelismResponse,
     },
+    ThreadCwdSet => "thread/cwd/set" {
+        params: v2::ThreadCwdSetParams,
+        serialization: thread_id(params.thread_id),
+        manual_payload_conversion: manual,
+        response: v2::ThreadResumeResponse,
+    },
     ThreadTasksRead => "thread/tasks/read" {
         params: v2::ThreadTasksReadParams,
         serialization: thread_id(params.thread_id),

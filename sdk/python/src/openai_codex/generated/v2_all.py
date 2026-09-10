@@ -5092,6 +5092,26 @@ class ThreadCompactStartResponse(BaseModel):
     )
 
 
+class ThreadCwdSetParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    cwd: Annotated[
+        str,
+        Field(
+            description="Absolute working directory to load for this idle local thread. Reloads workspace configuration while retaining the thread's identity and history."
+        ),
+    ]
+    developer_instructions: Annotated[
+        str | None,
+        Field(
+            alias="developerInstructions",
+            description="Client-provided developer instructions for the destination workspace. When omitted, use the instructions from the reloaded configuration.",
+        ),
+    ] = None
+    thread_id: Annotated[str, Field(alias="threadId")]
+
+
 class ThreadDeleteParams(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6701,6 +6721,15 @@ class ThreadTasksParallelismRequest(BaseModel):
         Literal["thread/tasks/parallelism"], Field(title="Thread/tasks/parallelismRequestMethod")
     ]
     params: ThreadTaskParallelismParams
+
+
+class ThreadCwdSetRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["thread/cwd/set"], Field(title="Thread/cwd/setRequestMethod")]
+    params: ThreadCwdSetParams
 
 
 class ThreadTasksReadRequest(BaseModel):
@@ -12142,6 +12171,7 @@ class ClientRequest(
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
         | ThreadTasksParallelismRequest
+        | ThreadCwdSetRequest
         | ThreadTasksReadRequest
         | ThreadGoalSetRequest
         | ThreadGoalGetRequest
@@ -12253,6 +12283,7 @@ class ClientRequest(
         | ThreadUnsubscribeRequest
         | ThreadNameSetRequest
         | ThreadTasksParallelismRequest
+        | ThreadCwdSetRequest
         | ThreadTasksReadRequest
         | ThreadGoalSetRequest
         | ThreadGoalGetRequest

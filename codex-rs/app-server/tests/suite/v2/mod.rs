@@ -101,6 +101,7 @@ mod skills_list;
 mod sleep;
 mod tasks;
 mod thread_archive;
+mod thread_cwd_set;
 mod thread_delete;
 mod thread_environments;
 mod thread_fork;

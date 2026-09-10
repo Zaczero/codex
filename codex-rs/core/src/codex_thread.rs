@@ -632,6 +632,26 @@ impl CodexThread {
             .await;
     }
 
+    /// Reconcile client and workspace instructions after a same-identity runtime reload.
+    /// Saved history already contains initial context, so changed instructions need an
+    /// append-only replacement notice before the next model request.
+    pub async fn reconcile_developer_instructions(
+        &self,
+        previous: Option<&str>,
+    ) -> CodexResult<()> {
+        let config = self.config().await;
+        let instructions = config.developer_instructions.as_deref().unwrap_or_default();
+        if instructions == previous.unwrap_or_default()
+            || self.session.reference_context_item().await.is_none()
+        {
+            return Ok(());
+        }
+        let fragment = crate::context::DeveloperInstructions::replacement(instructions)?;
+        self.inject_fragment_without_turn(fragment).await;
+        self.session.flush_rollout().await?;
+        Ok(())
+    }
+
     /// Record raw Responses API items without starting a new turn.
     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
         self.inject_response_items_for_turn(items).await?;

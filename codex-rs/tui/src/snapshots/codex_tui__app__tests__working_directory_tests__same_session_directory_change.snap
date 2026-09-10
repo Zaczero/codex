@@ -1,0 +1,5 @@
+---
+source: tui/src/app/tests/working_directory_tests.rs
+expression: "messages.replace(&destination.path().display().to_string(), \"<destination>\")"
+---
+• Working directory changed to: <destination>

@@ -12,6 +12,23 @@ impl DeveloperInstructions {
             instructions: instructions.into(),
         }
     }
+
+    pub(crate) fn replacement(instructions: &str) -> codex_protocol::error::Result<Self> {
+        let text = if instructions.is_empty() {
+            "The previously provided workspace and client developer instructions no longer apply."
+                .to_string()
+        } else {
+            format!(
+                "These workspace and client developer instructions replace all previously provided workspace and client developer instructions.\n\n{instructions}"
+            )
+        };
+        if text.len() > codex_utils_string::approx_bytes_for_tokens(/*tokens*/ 10_000) {
+            return Err(codex_protocol::error::CodexErr::InvalidRequest(
+                "workspace developer instructions exceed the 10000-token context limit".to_string(),
+            ));
+        }
+        Ok(Self::new(text))
+    }
 }
 
 impl ContextualUserFragment for DeveloperInstructions {

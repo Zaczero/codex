@@ -1319,6 +1319,35 @@ impl AppServerSession {
         }
     }
 
+    pub(crate) async fn thread_cwd_set(
+        &mut self,
+        thread_id: ThreadId,
+        local_settings: &LocalSettings,
+        config: &Config,
+    ) -> Result<AppServerStartedThread> {
+        let request_id = self.next_request_id();
+        let response = self
+            .client
+            .request_typed(ClientRequest::ThreadCwdSet {
+                request_id,
+                params: codex_app_server_protocol::ThreadCwdSetParams {
+                    thread_id: thread_id.to_string(),
+                    cwd: config.cwd.to_path_buf(),
+                    developer_instructions: with_terminal_visualization_instructions(
+                        config, /*control_instructions*/ None,
+                    ),
+                },
+            })
+            .await?;
+        started_thread_from_resume_response(
+            response,
+            local_settings,
+            config,
+            self.thread_params_mode(),
+        )
+        .await
+    }
+
     pub(crate) async fn thread_inject_items(
         &mut self,
         thread_id: ThreadId,

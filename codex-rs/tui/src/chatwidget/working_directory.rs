@@ -4,6 +4,36 @@ use super::*;
 use crate::history_cell::McpInventoryLoadingCell;
 
 impl ChatWidget {
+    pub(crate) fn reload_working_directory_config(
+        &mut self,
+        config: Config,
+        local_settings: crate::local_settings::LocalSettings,
+        session: ThreadSessionState,
+    ) {
+        self.config = config;
+        self.local_settings = local_settings;
+        self.current_cwd = Some(session.cwd.to_path_buf());
+        self.current_rollout_path = session.rollout_path;
+        self.instruction_source_paths = session.instruction_source_paths;
+        self.session_network_proxy = session.network_proxy;
+        self.config.workspace_roots = session.runtime_workspace_roots;
+        self.config
+            .permissions
+            .set_workspace_roots(self.config.workspace_roots.clone());
+        self.status_line_project_root_name_cache = None;
+        self.invalidate_permission_discovery();
+        self.invalidate_connector_scope();
+        self.refresh_skills_for_current_cwd(/*force_reload*/ true);
+        self.refresh_connector_mentions(/*force_refresh*/ false);
+        self.refresh_plugin_mentions();
+        self.sync_worktrees_enabled();
+        self.sync_plugins_command_enabled();
+        self.sync_goal_command_enabled();
+        self.sync_personality_command_enabled();
+        self.refresh_status_surfaces();
+        self.request_redraw();
+    }
+
     pub(crate) fn can_change_working_directory(&self, thread_id: ThreadId) -> bool {
         let active = &self.transcript.active_cell;
         self.thread_id == Some(thread_id)

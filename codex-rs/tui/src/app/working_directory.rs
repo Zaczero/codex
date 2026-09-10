@@ -279,7 +279,8 @@ impl App {
         let rollout = self.chat_widget.rollout_path();
         let has_rollout = rollout.as_deref().is_some_and(rollout_path_is_resumable);
         let channels = &self.thread_event_channels;
-        if !has_rollout
+        if managed_worktree.is_some()
+            && !has_rollout
             && !is_new_worktree
             && (!self.chat_widget.token_usage().is_zero()
                 || channels.get(&thread_id).is_some_and(|channel| {
@@ -330,7 +331,12 @@ impl App {
             );
         }
         let preserve_history = has_rollout && !is_new_worktree;
-        let transitioned = if preserve_history {
+        let same_thread = managed_worktree.is_none();
+        let transitioned = if same_thread {
+            app_server
+                .thread_cwd_set(thread_id, &local_settings, &config)
+                .await
+        } else if preserve_history {
             app_server
                 .fork_thread_at(
                     &local_settings,
@@ -358,12 +364,15 @@ impl App {
             Err(e) => return self.working_directory_error(format!("Failed to change: {e}")),
         };
         let session = &transitioned.session;
-        if session.thread_id == thread_id
+        if (session.thread_id == thread_id) != same_thread
             || crate::session_resume::cwds_differ(session.cwd.as_path(), cwd.as_path())
-            || session.runtime_workspace_roots != config.workspace_roots
-            || session.approval_policy.to_core() != config.permissions.approval_policy.value()
-            || session.approvals_reviewer != config.approvals_reviewer
-            || session.active_permission_profile != config.permissions.active_permission_profile()
+            || (!same_thread
+                && (session.runtime_workspace_roots != config.workspace_roots
+                    || session.approval_policy.to_core()
+                        != config.permissions.approval_policy.value()
+                    || session.approvals_reviewer != config.approvals_reviewer
+                    || session.active_permission_profile
+                        != config.permissions.active_permission_profile()))
         {
             if session.thread_id != thread_id {
                 let _ = app_server.thread_unsubscribe(session.thread_id).await;
@@ -372,6 +381,31 @@ impl App {
                 }
             }
             return self.working_directory_error("Requested directory or permissions not applied.");
+        }
+        if same_thread {
+            config.workspace_roots = session.runtime_workspace_roots.clone();
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
+            config.permissions.approval_policy =
+                codex_config::Constrained::allow_only(session.approval_policy.to_core());
+            if let Err(error) = config
+                .permissions
+                .replace_permission_profile_from_session_snapshot(
+                    codex_protocol::models::PermissionProfileSnapshot::from_session_snapshot(
+                        session.permission_profile.clone(),
+                        session.active_permission_profile.clone(),
+                    ),
+                )
+            {
+                tracing::error!(%error, "failed to mirror working-directory permissions");
+            }
+            config.approvals_reviewer = session.approvals_reviewer;
+            config.model = Some(session.model.clone());
+            config.model_provider_id = session.model_provider_id.clone();
+            config.model_reasoning_effort = session.reasoning_effort.clone();
+            config.service_tier = session.service_tier.clone();
+            config.personality = self.chat_widget.config_ref().personality;
         }
         if let Some((manager, checkout, _, _)) = managed_worktree.as_ref()
             && let Err(error) =
@@ -403,7 +437,7 @@ impl App {
         } else {
             None
         };
-        if let Err(error) = app_server.thread_unsubscribe(thread_id).await {
+        if !same_thread && let Err(error) = app_server.thread_unsubscribe(thread_id).await {
             let replacement_id = transitioned.session.thread_id;
             let _ = app_server.thread_unsubscribe(replacement_id).await;
             if preserve_history {
@@ -411,7 +445,10 @@ impl App {
             }
             return self.working_directory_error(format!("Cannot change directories: {error}"));
         }
-        for tracked_id in ids.into_iter().filter(|id| *id != thread_id) {
+        for tracked_id in ids
+            .into_iter()
+            .filter(|id| !same_thread && *id != thread_id)
+        {
             if let Err(error) = app_server.thread_unsubscribe(tracked_id).await {
                 tracing::warn!("failed to unsubscribe tracked thread {tracked_id}: {error}");
             }
@@ -458,10 +495,22 @@ impl App {
         if let Err(error) = tui.clear_ambient_pet_image() {
             tracing::warn!(%error, "failed to clear ambient pet image");
         }
-        let attach_widget = App::replace_chat_widget_with_app_server_thread;
-        let (lineage, message) = (ThreadAttachPresentation::SessionLineage, None);
-        if let Err(error) = attach_widget(self, tui, started, lineage, message).await {
-            return self.working_directory_error(format!("Could not restore session: {error}"));
+        if self.chat_widget.thread_id() == Some(started.session.thread_id) {
+            self.primary_session_configured = Some(started.session.clone());
+            if let Some(channel) = self.thread_event_channels.get(&started.session.thread_id) {
+                channel.store.lock().await.session = Some(started.session.clone());
+            }
+            self.chat_widget.reload_working_directory_config(
+                self.config.clone(),
+                self.local_settings.clone(),
+                started.session,
+            );
+        } else {
+            let attach_widget = App::replace_chat_widget_with_app_server_thread;
+            let (lineage, message) = (ThreadAttachPresentation::SessionLineage, None);
+            if let Err(error) = attach_widget(self, tui, started, lineage, message).await {
+                return self.working_directory_error(format!("Could not restore session: {error}"));
+            }
         }
         if let Some(error) = name_error {
             self.chat_widget.add_error_message(error);

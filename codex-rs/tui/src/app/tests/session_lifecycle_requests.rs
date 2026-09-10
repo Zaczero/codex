@@ -473,13 +473,25 @@ async fn start_recording_app_server_with_realtime_speech(
                             ClientRequest::ThreadFork { params, .. }
                                 if params.cwd.as_deref().is_some_and(|cwd| cwd.ends_with("failure"))
                                     && { reject_detach = true; true }
+                        ) || matches!(
+                            &request,
+                            ClientRequest::ThreadCwdSet { params, .. }
+                                if params.cwd.ends_with("failure")
                         ) || (detach && std::mem::take(&mut reject_detach));
                         if force_failure {
                             JSONRPCMessage::Error(JSONRPCError {
                                 id: request_id,
                                 error: JSONRPCErrorError {
                                     code: -32603,
-                                    message: "forced thread/name/set failure".to_string(),
+                                    message: if matches!(
+                                        request,
+                                        ClientRequest::ThreadCwdSet { .. }
+                                    ) {
+                                        "forced directory change failure"
+                                    } else {
+                                        "forced thread/name/set failure"
+                                    }
+                                    .to_string(),
                                     data: None,
                                 },
                             })
@@ -3502,7 +3514,7 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         fs::create_dir_all(directory.join(".codex"))?;
         fs::write(directory.join(".codex/config.toml"), "")?;
     }
-    let contents = "developer_instructions = \"destination policy\"\nmodel_reasoning_effort = \"high\"\napproval_policy = \"on-request\"\n[tui]\ntheme = \"dracula\"\n[tui.keymap.global]\nopen_transcript = \"f12\"";
+    let contents = "developer_instructions = \"destination policy\"\nmodel_reasoning_effort = \"high\"\napproval_policy = \"on-request\"\n[features]\nterminal_visualization_instructions = true\n[tui]\ntheme = \"dracula\"\n[tui.keymap.global]\nopen_transcript = \"f12\"";
     fs::write(trusted.join(".codex/config.toml"), contents)?;
     let agents = trusted.join("AGENTS.md");
     fs::write(&agents, "Follow destination project instructions.")?;
@@ -3532,6 +3544,8 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         .await;
     let original = app.chat_widget.thread_id().expect("original thread");
     let rollout = app.chat_widget.rollout_path().expect("original rollout");
+    let original_effort = app.chat_widget.current_reasoning_effort();
+    let original_approval = app.config.permissions.approval_policy.value();
     let json = r#"{"type":"message","role":"assistant","content":[{"type":"output_text","text":"saved history"}]}"#;
     let item = serde_json::from_str(json)?;
     server.thread_inject_items(original, vec![item]).await?;
@@ -3685,28 +3699,12 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         );
         let output = history().join("");
         insta::allow_duplicates! {
-            assert_snapshot!(output, @"■ Failed to change: thread/fork failed during TUI bootstrap: thread/fork failed: forced thread/name/set failure (code -32603)");
+            assert_snapshot!(output, @"■ Failed to change: thread/cwd/set failed: forced directory change failure (code -32603)");
         }
     }
     app.agent_navigation.upsert(
         child, /*agent_nickname*/ None, /*agent_role*/ None, /*is_closed*/ false,
     );
-    app.set_approvals_reviewer_in_app_and_widget(ApprovalsReviewer::AutoReview);
-    app.runtime_permission_profile_override =
-        Some(RuntimePermissionProfileOverride::from_config(&app.config));
-    for (path, expected) in [(&failed, 0), (&trusted, 2)] {
-        requests.lock().expect("request recorder lock").clear();
-        app.change_working_directory(&mut tui, &mut server, path.clone().abs())
-            .await;
-        assert_eq!(app.chat_widget.thread_id(), Some(original));
-        assert_eq!(app.config.cwd, current.clone().abs());
-        assert_eq!(rec(&requests, "thread/unsubscribe").len(), expected);
-        assert!(history().join("").contains("change"));
-    }
-    let removed = recorded_params(&requests, "thread/unsubscribe");
-    let archived = recorded_params(&requests, "thread/archive");
-    assert_eq!(removed[0]["threadId"], original.to_string());
-    assert_eq!(archived[0]["threadId"], removed[1]["threadId"]);
     requests.lock().expect("request recorder lock").clear();
     app.handle_event(&mut tui, &mut server, change(original, "../trusted"))
         .await?;
@@ -3717,14 +3715,9 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         .take()
         .expect("valid /cd queued");
     Box::pin(app.finish_working_directory_change(&mut tui, &mut server, pending)).await;
-    let forked = app.chat_widget.thread_id().expect("forked thread");
-    assert_ne!(forked, original);
-    let forked_rollout = app.chat_widget.rollout_path().expect("forked rollout");
+    assert_eq!(app.chat_widget.thread_id(), Some(original));
+    assert_eq!(app.chat_widget.rollout_path(), Some(rollout.clone()));
     assert!(fs::read_to_string(&rollout)?.contains("saved history"));
-    let copied = fs::read_to_string(&forked_rollout)?;
-    let meta = codex_rollout::read_session_meta_line(&forked_rollout).await?;
-    let base = meta.meta.history_base;
-    assert!(copied.contains("saved history") || base.is_some_and(|h| h.thread_id == original));
     assert_eq!(app.config.cwd, trusted.clone().abs());
     let configured = app.primary_session_configured.as_ref().expect("session");
     let source = codex_utils_path_uri::PathUri::from_abs_path(&agents.abs());
@@ -3752,29 +3745,25 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
     let anchor = app.runtime_working_directory_override.as_deref();
     assert_eq!(anchor, Some(trusted.as_path()));
     let effort = app.chat_widget.current_reasoning_effort();
-    assert_eq!(effort, Some(ReasoningEffortConfig::High));
+    assert_eq!(effort, original_effort);
     let approval = app.config.permissions.approval_policy.value();
-    assert_eq!(approval, AskForApproval::OnRequest.to_core());
-    let forks = recorded_params(&requests, "thread/fork");
-    assert_eq!(forks.len(), 1);
-    let params = &forks[0];
-    assert_eq!(params["threadId"], serde_json::json!(original.to_string()));
-    assert_eq!(params["cwd"], serde_json::json!(trusted));
-    assert_eq!(params["approvalsReviewer"].as_str(), Some("auto_review"));
-    assert_eq!(params["developerInstructions"], "destination policy");
-    assert_eq!(params["deferGoalContinuation"], serde_json::json!(true));
-    assert_eq!(&params["runtimeWorkspaceRoots"], &json!([trusted]));
+    assert_eq!(approval, original_approval);
+    let changes = recorded_params(&requests, "thread/cwd/set");
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["threadId"], json!(original.to_string()));
+    assert_eq!(changes[0]["cwd"], json!(trusted));
+    let instructions = changes[0]["developerInstructions"]
+        .as_str()
+        .expect("client instructions");
+    assert!(instructions.contains("destination policy"));
+    assert!(instructions.contains("This surface is a terminal."));
     assert_eq!(rec(&requests, "hooks/list")[0]["cwds"], json!([trusted]));
-    for suffix in "start resume settings/update archive".split(' ') {
+    for suffix in "start resume fork settings/update archive unsubscribe".split(' ') {
         assert!(recorded_params(&requests, &format!("thread/{suffix}")).is_empty());
     }
-    assert!(rec(req, "thread/metadata/update")[0]["threadId"] == params["threadId"]);
-    let removed = recorded_params(&requests, "thread/unsubscribe");
-    assert_eq!(removed.len(), 2);
-    let found = |id: ThreadId| removed.iter().any(|p| p["threadId"] == id.to_string());
-    assert!([original, child].into_iter().all(found));
+    assert!(rec(req, "thread/metadata/update").is_empty());
     let retained = server.thread_read(original, /*include_turns*/ false);
-    assert_eq!(retained.await?.cwd, current.abs().canonicalize()?);
+    assert_eq!(retained.await?.cwd, trusted.clone().abs().canonicalize()?);
     assert_eq!(app.chat_widget.config_ref().cwd, trusted.clone().abs());
     assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("SessionStart"));
     app.chat_widget
@@ -3791,8 +3780,8 @@ async fn changing_directory_preserves_project_trust_permissions_history_and_hook
         .await;
     assert_eq!(app.config.active_project.trust_level, Some(T::Untrusted));
     let approval = app.config.permissions.approval_policy.value();
-    assert_eq!(approval, AskForApproval::UnlessTrusted.to_core());
-    assert_eq!(rec(req, "thread/fork")[0]["approvalPolicy"], "untrusted");
+    assert_eq!(approval, original_approval);
+    assert_eq!(rec(req, "thread/cwd/set")[0]["cwd"], json!(untrusted));
     let warning = "Project-local config, hooks, and exec policies are disabled";
     assert!(history().iter().any(|line| line.contains(warning)));
     server.shutdown().await?;

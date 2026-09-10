@@ -32,6 +32,30 @@ after a client tries to archive or delete it.
 After the owner releases the worker, its saved conversation can be archived or
 deleted normally. Ordinary client-controlled threads keep their existing behavior.
 
+# Working-directory changes
+
+`thread/cwd/set` accepts `{threadId, cwd}` and reloads an idle, persistent local
+root thread in an absolute destination directory. It returns a `ThreadResumeResponse`
+with an empty `thread.turns` array and emits `thread/settings/updated` to subscribed
+clients. The thread identity,
+conversation history, name, ledger and session settings are retained. The destination's
+project configuration, instructions and runtime services are loaded without starting
+a model turn. The directory change is persisted before the response.
+
+Clients may supply `developerInstructions` for the destination, as with thread
+startup. Omission uses the reloaded project's instructions. The TUI supplies its
+terminal-specific instructions when that feature is enabled.
+
+The thread and its agents must be idle with no background terminals, and the
+destination must have an explicit trust decision. Untrusted destinations keep
+project-local configuration and hooks disabled. Invalid destination configuration leaves the source
+runtime intact. If replacement startup fails, the server attempts to restore the
+source runtime and reports the error. Existing subscriptions survive the reload.
+
+The TUI uses this operation for `/cd`. `thread/settings/update` remains the partial
+settings-update API; it does not reload all project configuration. Forking or creating
+a managed worktree still creates a separate thread.
+
 # Amazon Bedrock authentication
 
 If `model_providers.amazon-bedrock.aws.credential_export` is configured, Bedrock setup and

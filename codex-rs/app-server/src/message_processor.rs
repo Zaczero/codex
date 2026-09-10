@@ -951,7 +951,8 @@ impl MessageProcessor {
             | ClientRequest::ThreadFork { .. }
             | ClientRequest::ThreadResume { .. }
             | ClientRequest::ThreadRollback { .. }
-            | ClientRequest::ThreadRevert { .. } => (Some(self.turn_admission.admit()?), false),
+            | ClientRequest::ThreadRevert { .. }
+            | ClientRequest::ThreadCwdSet { .. } => (Some(self.turn_admission.admit()?), false),
             ClientRequest::TurnStart { .. }
             | ClientRequest::TurnSteer { .. }
             | ClientRequest::ReviewStart { .. }
@@ -1419,6 +1420,16 @@ impl MessageProcessor {
                         client_version.clone(),
                     )
                     .await
+            }
+            ClientRequest::ThreadCwdSet { params, .. } => {
+                // Reload retains both workspace configurations across shutdown and recovery.
+                Box::pin(self.thread_processor.thread_cwd_set(
+                    &request_id,
+                    params,
+                    app_server_client_name.clone(),
+                    client_version.clone(),
+                ))
+                .await
             }
             ClientRequest::ThreadList { params, .. } => {
                 self.thread_processor.thread_list(params).await

@@ -25,6 +25,7 @@ use codex_protocol::protocol::ThreadHistoryMode;
 use codex_thread_store::PersistContext;
 use std::ops::ControlFlow;
 
+mod runtime_reload;
 mod tasks;
 
 pub(super) const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
@@ -96,7 +97,8 @@ struct PreparedResumeConfig {
     config: Config,
 }
 
-struct ThreadRevertRuntimeSnapshot {
+#[derive(Clone)]
+struct ThreadRuntimeSnapshot {
     config: Config,
     settings: CodexThreadSettingsOverrides,
     client_mcp_extensions: ClientMcpExtensions,
@@ -2125,79 +2127,14 @@ impl ThreadRequestProcessor {
                 "thread/revert only supports paginated threads",
             ));
         }
-        let runtime_snapshot = ThreadRevertRuntimeSnapshot {
+        let runtime_snapshot = ThreadRuntimeSnapshot {
             config: thread.config().await.as_ref().clone(),
             settings: thread.restorable_thread_settings().await,
             client_mcp_extensions: thread.client_mcp_extensions(),
         };
 
-        // Subscribe before shutdown so a pending idle unload either rejects this request or can
-        // no longer race the replacement runtime. The same listener then drains Core's shutdown
-        // events before we replace it.
-        if matches!(
-            self.ensure_conversation_listener(
-                thread_id,
-                request_id.connection_id,
-                /*raw_events_enabled*/ false,
-            )
-            .await?,
-            EnsureConversationListenerResult::ConnectionClosed
-        ) {
-            return Err(internal_error(format!(
-                "connection closed before thread {thread_id} could be reverted"
-            )));
-        }
-        let thread_state = self.thread_state_manager.thread_state(thread_id).await;
-        let shutdown_drain_rx = thread_state.lock().await.register_shutdown_drain_waiter();
-
-        match wait_for_thread_shutdown(&thread).await {
-            ThreadShutdownResult::Complete => {}
-            ThreadShutdownResult::SubmitFailed => {
-                thread_state.lock().await.take_shutdown_drain_waiter();
-                return Err(internal_error(format!(
-                    "failed to shut down thread {thread_id} before revert"
-                )));
-            }
-            ThreadShutdownResult::TimedOut => {
-                thread_state.lock().await.take_shutdown_drain_waiter();
-                return Err(internal_error(format!(
-                    "timed out shutting down thread {thread_id} before revert"
-                )));
-            }
-        }
-        let drain_result = tokio::time::timeout(Duration::from_secs(10), shutdown_drain_rx)
-            .await
-            .map_err(|_| {
-                internal_error(format!(
-                    "timed out waiting for thread {thread_id} listener to drain shutdown events"
-                ))
-            })
-            .and_then(|result| {
-                result.map_err(|_| {
-                    internal_error(format!(
-                        "thread {thread_id} listener stopped before draining shutdown events"
-                    ))
-                })
-            });
-        if let Err(err) = drain_result {
-            thread_state.lock().await.take_shutdown_drain_waiter();
-            return Err(err);
-        }
-        if self
-            .thread_manager
-            .remove_thread(&thread_id)
-            .await
-            .is_none()
-        {
-            return Err(internal_error(format!(
-                "thread {thread_id} disappeared before revert"
-            )));
-        }
-        // Keep thread state and subscriptions across the internal reload. Full teardown would
-        // force clients to call thread/resume after a successful revert.
-        self.outgoing
-            .cancel_requests_for_thread(thread_id, /*error*/ None)
-            .await;
+        self.stop_thread_for_reload(request_id, thread_id, &thread)
+            .await?;
 
         let revert_result = self
             .thread_store
@@ -2208,8 +2145,8 @@ impl ThreadRequestProcessor {
             })
             .await
             .map_err(|err| thread_store_mutation_error("revert", err));
-        let response = self
-            .reload_paginated_thread(
+        let (_, response) = self
+            .reload_thread_runtime(
                 request_id,
                 thread_id,
                 runtime_snapshot,
@@ -2218,18 +2155,25 @@ impl ThreadRequestProcessor {
             )
             .await?;
         revert_result?;
-        Ok((response, thread_id.to_string()))
+        Ok((
+            ThreadRevertResponse {
+                thread: response.thread,
+                turns_backwards_cursor: response.turns_backwards_cursor,
+                items_backwards_cursor: response.items_backwards_cursor,
+            },
+            thread_id.to_string(),
+        ))
     }
 
-    async fn reload_paginated_thread(
+    async fn reload_thread_runtime(
         &self,
         request_id: &ConnectionRequestId,
         thread_id: ThreadId,
-        runtime_snapshot: ThreadRevertRuntimeSnapshot,
+        runtime_snapshot: ThreadRuntimeSnapshot,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<ThreadRevertResponse, JSONRPCErrorError> {
-        let ThreadRevertRuntimeSnapshot {
+    ) -> Result<(Arc<CodexThread>, ThreadResumeResponse), JSONRPCErrorError> {
+        let ThreadRuntimeSnapshot {
             config,
             settings,
             client_mcp_extensions,
@@ -2261,10 +2205,10 @@ impl ThreadRequestProcessor {
                 client_mcp_extensions,
             )
             .await
-            .map_err(|err| internal_error(format!("error reloading thread after revert: {err}")))?;
+            .map_err(|err| internal_error(format!("error reloading thread {thread_id}: {err}")))?;
         if resumed_thread_id != thread_id {
             return Err(internal_error(format!(
-                "thread {thread_id} reloaded as {resumed_thread_id} after revert"
+                "thread {thread_id} reloaded as {resumed_thread_id}"
             )));
         }
         codex_thread
@@ -2272,7 +2216,7 @@ impl ThreadRequestProcessor {
             .await
             .map_err(|err| {
                 internal_error(format!(
-                    "failed to restore thread settings after revert: {err}"
+                    "failed to restore thread settings after reload: {err}"
                 ))
             })?;
         // Replace the resume-time checkpoint written from the original config.
@@ -2281,7 +2225,7 @@ impl ThreadRequestProcessor {
             .await
             .map_err(|err| {
                 internal_error(format!(
-                    "failed to persist restored thread settings after revert: {err}"
+                    "failed to persist restored thread settings after reload: {err}"
                 ))
             })?;
         Self::set_app_server_client_info(
@@ -2296,12 +2240,14 @@ impl ThreadRequestProcessor {
                 "rollout path missing after reloading thread {thread_id}"
             ))
         })?;
-        // Revert keeps the existing thread state and subscriptions across the internal reload.
+        // Keep the existing thread state and subscriptions across the internal reload.
         // Start the replacement listener from that state instead of depending on the requesting
         // connection still being open.
         let thread_state = self.thread_state_manager.thread_state(thread_id).await;
         self.ensure_listener_task_running(thread_id, Arc::clone(&codex_thread), thread_state)
             .await?;
+        let config_snapshot = codex_thread.config_snapshot().await;
+        let paginated = matches!(config_snapshot.history_mode, ThreadHistoryMode::Paginated);
         let mut thread = self
             .load_thread_from_resume_source_or_send_internal(
                 thread_id,
@@ -2323,13 +2269,33 @@ impl ThreadRequestProcessor {
             thread_status,
             /*has_live_in_progress_turn*/ false,
         );
-        let (turns_backwards_cursor, items_backwards_cursor) =
-            Self::paginated_resume_backwards_cursors(self.thread_store.as_ref(), thread_id).await?;
-        Ok(ThreadRevertResponse {
+        let (turns_backwards_cursor, items_backwards_cursor) = if paginated {
+            Self::paginated_resume_backwards_cursors(self.thread_store.as_ref(), thread_id).await?
+        } else {
+            (None, None)
+        };
+        let sandbox = config_snapshot.sandbox_policy().into();
+        let response = ThreadResumeResponse {
             thread,
+            model: config_snapshot.model,
+            model_provider: config_snapshot.model_provider_id,
+            service_tier: config_snapshot.service_tier,
+            cwd: config_snapshot.environments.legacy_fallback_cwd,
+            runtime_workspace_roots: config_snapshot.workspace_roots,
+            instruction_sources: codex_thread.legacy_instruction_sources().await,
+            approval_policy: config_snapshot.approval_policy.into(),
+            approvals_reviewer: config_snapshot.approvals_reviewer.into(),
+            sandbox,
+            active_permission_profile: thread_response_active_permission_profile(
+                config_snapshot.active_permission_profile,
+            ),
+            reasoning_effort: config_snapshot.reasoning_effort,
+            multi_agent_mode: MultiAgentMode::ExplicitRequestOnly,
+            initial_turns_page: None,
             turns_backwards_cursor,
             items_backwards_cursor,
-        })
+        };
+        Ok((codex_thread, response))
     }
 
     async fn thread_rollback_start(

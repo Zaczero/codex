@@ -4181,6 +4181,29 @@
       ],
       "type": "object"
     },
+    "ThreadCwdSetParams": {
+      "properties": {
+        "cwd": {
+          "description": "Absolute working directory to load for this idle local thread. Reloads workspace configuration while retaining the thread's identity and history.",
+          "type": "string"
+        },
+        "developerInstructions": {
+          "description": "Client-provided developer instructions for the destination workspace. When omitted, use the instructions from the reloaded configuration.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ThreadDeleteParams": {
       "properties": {
         "threadId": {
@@ -6063,6 +6086,30 @@
         "params"
       ],
       "title": "Thread/tasks/parallelismRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "thread/cwd/set"
+          ],
+          "title": "Thread/cwd/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ThreadCwdSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Thread/cwd/setRequest",
       "type": "object"
     },
     {

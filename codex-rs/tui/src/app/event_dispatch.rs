@@ -937,8 +937,13 @@ impl App {
             AppEvent::SyncThreadGitBranch {
                 thread_id,
                 branch,
-                cwd: _cwd,
+                cwd,
             } => {
+                if let Some(current_cwd) = self.thread_cwd(thread_id).await
+                    && cwds_differ(&cwd, current_cwd.as_path())
+                {
+                    return Ok(AppRunControl::Continue);
+                }
                 if let Err(err) = app_server
                     .thread_metadata_update_branch(thread_id, branch)
                     .await

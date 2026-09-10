@@ -283,6 +283,20 @@ pub struct ThreadSettingsUpdateParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadSettingsUpdateResponse {}
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadCwdSetParams {
+    pub thread_id: String,
+    /// Absolute working directory to load for this idle local thread.
+    /// Reloads workspace configuration while retaining the thread's identity and history.
+    pub cwd: PathBuf,
+    /// Client-provided developer instructions for the destination workspace.
+    /// When omitted, use the instructions from the reloaded configuration.
+    #[ts(optional = nullable)]
+    pub developer_instructions: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

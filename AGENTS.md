@@ -43,6 +43,13 @@ than assume a particular compaction implementation retains hook text.
 
 In the codex-rs folder where the rust code lives:
 
+- `/cd` uses `thread/cwd/set` to reload workspace configuration under the same thread ID.
+  Preserve thread-owned storage and client subscriptions across runtime replacement;
+  copying selected extension state into a new thread does not preserve session identity.
+  Managed worktree Fork/New operations intentionally create separate threads.
+  Developer instructions live in initial context rather than World State; reloads
+  reconcile changed instructions with an append-only replacement or removal notice.
+
 - Crate names are prefixed with `codex-`. For example, the `core` folder's crate is named `codex-core`
 - When using format! and you can inline variables into {}, always do that.
 - Install any commands the repo relies on (for example `just`, `rg`, or `cargo-insta`) if they aren't already available before running instructions here.
@@ -171,6 +178,12 @@ the centralized build directory. For Guardian integration tests, build
 `cargo build -p codex-rmcp-client --bin test_stdio_server` from `codex-rs`, then
 set `CARGO_BIN_EXE_test_stdio_server` to the absolute path of that executable
 when invoking `just test`.
+
+Broader app-server tests also need `codex`, `codex-code-mode-host`, and
+`test_mcp_2026_stdio_server`. Build those binaries from the tested tree and set
+`CARGO_BIN_EXE_codex`, `CARGO_BIN_EXE_codex_code_mode_host`, and
+`CARGO_BIN_EXE_test_mcp_2026_stdio_server` to their absolute `target/debug` paths.
+The underscore spelling for the Code Mode host is accepted by the binary resolver.
 
 The pinned Python SDK schema generator (`datamodel-code-generator==0.31.2`)
 does not support running under Python 3.14. Use `UV_PYTHON=3.13` when invoking
