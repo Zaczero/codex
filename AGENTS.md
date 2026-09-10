@@ -116,6 +116,13 @@ Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in 
 The local `~/.cargo/bin/codex` is a symlink to this checkout's
 `codex-rs/target/release/codex`. A release build updates the executable used by
 new invocations; preserve the link instead of copying binaries over it.
+Build both `codex` and `codex-code-mode-host` for installation; the CLI locates
+the Code Mode companion beside its resolved executable. A CLI-only build leaves
+Code Mode unavailable.
+
+Keep the checkout's release as the sole installed Codex CLI. Remove package-manager
+installations and stale launchers; PATH priority alone leaves old clients callable.
+Passphrase-only clients cannot read the fork's key-based encrypted credential files.
 
 Run from the repository root to use the pinned Nix packages while retaining the
 repository's rustup toolchain. The login test graph needs OpenSSL, ALSA, libcap,
@@ -135,6 +142,21 @@ nix develop --impure --expr '
 
 Use the same environment for `just fix -p codex-login` and `just fmt`. Cargo's
 existing build directory is shared across these invocations.
+
+For related core, app-server, and exec checks, keep the affected package set
+stable and narrow execution with nextest's `-E` filter. Changing the `-p` set
+can change unified dependency features and rebuild shared crates despite sccache.
+Debug, Clippy, and release artifacts also have distinct compiler-cache keys;
+release binary optimization and linking are not cached by sccache.
+
+For Cargo Code Mode builds, follow `.github/actions/setup-rusty-v8/action.yml`:
+download the exact-version sandbox archive and matching Rust bindings from the
+OpenAI Codex release, verify the manifest against
+`third_party/v8/rusty_v8_<version>_release_manifests.sha256`, then verify both
+artifacts. Set `RUSTY_V8_ARCHIVE` and `RUSTY_V8_SRC_BINDING_PATH` for tests and
+`cargo build --release --bin codex --bin codex-code-mode-host` in `codex-rs`.
+The default `denoland/rusty_v8` download does not contain this sandbox pair;
+`RUSTY_V8_MIRROR` also uses a different tag layout. See `third_party/v8/README.md`.
 
 Run tests with `RUST_MIN_STACK=8388608`, as CI does: debug test threads
 otherwise overflow their stack in many `codex-core` unit tests, which aborts
@@ -153,27 +175,6 @@ when invoking `just test`.
 The pinned Python SDK schema generator (`datamodel-code-generator==0.31.2`)
 does not support running under Python 3.14. Use `UV_PYTHON=3.13` when invoking
 `just write-app-server-schema`; Python 3.13 satisfies the SDK's declared range.
-
-## NixOS development environment
-
-Run from the repository root to use the pinned Nix packages while retaining the
-repository's rustup toolchain. The login test graph needs OpenSSL, ALSA, libcap,
-and D-Bus development files; the repository formatter also needs DotSlash.
-
-```sh
-nix develop --impure --expr '
-  let
-    flake = builtins.getFlake (toString ./.);
-    pkgs = import flake.inputs.nixpkgs { system = builtins.currentSystem; };
-  in pkgs.mkShell {
-    packages = with pkgs; [ pkg-config openssl alsa-lib libcap dbus cmake clang dotslash ];
-    LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-  }
-' -c just test -p codex-login
-```
-
-Use the same environment for `just fix -p codex-login` and `just fmt`. Cargo's
-existing build directory is shared across these invocations.
 
 ## Account-bound history
 
