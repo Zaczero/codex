@@ -145,6 +145,12 @@ async fn handle_spawn_agent(
     }
     apply_spawn_agent_service_tier(&session, &mut config).await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+    let environments = super::super::agent_workspace::spawn_environments(
+        &mut config,
+        &step_context,
+        args.cwd.as_deref(),
+    )
+    .await?;
 
     // Remember an applied configured default so cold reload reapplies its restrictions.
     let persisted_role_name = role_name.or_else(|| {
@@ -228,7 +234,7 @@ async fn handle_spawn_agent(
                     parent_thread_id: Some(session.thread_id),
                     parent_turn_id: Some(turn.sub_id.clone()),
                     root_turn_id: turn.turn_metadata_state.root_turn_id(),
-                    environments: Some(step_context.environments.to_selections()),
+                    environments: Some(environments),
                     multi_agent_v2_usage_hints,
                     cyber_access_program: turn.cyber_access_program,
                 },
@@ -297,6 +303,7 @@ impl CoreToolRuntime for Handler {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SpawnAgentArgs {
+    cwd: Option<String>,
     message: String,
     task_name: String,
     agent_type: Option<String>,

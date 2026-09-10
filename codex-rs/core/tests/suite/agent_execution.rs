@@ -32,6 +32,183 @@ const FIRST_TASK: &str = "first worker task";
 const SECOND_TASK: &str = "second worker task";
 const MULTI_AGENT_V2_NAMESPACE: &str = "codex_agents";
 
+#[test_case("", "cwd must not be empty"; "empty path")]
+#[test_case("missing-checkout", "Cannot access child cwd"; "missing directory")]
+#[test_case("not-a-directory", "Child cwd must be a directory"; "file path")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_cwd_rejects_invalid_directory(cwd: &str, error: &str) -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("enable collaboration");
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("enable v2");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    test.fs()
+        .write_file(
+            &test.workspace_path_uri("not-a-directory")?,
+            b"regular file".to_vec(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
+        .await?;
+    mount_root_collaboration_call(
+        &server,
+        FIRST_PROMPT,
+        "invalid-cwd",
+        "spawn_agent",
+        json!({
+            "message": FIRST_TASK, "task_name": "first", "fork_turns": "none", "cwd": cwd,
+        }),
+    )
+    .await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(FIRST_PROMPT).await?;
+    assert!(created.try_recv().is_err());
+    let requests = server.received_requests().await.expect("recorded requests");
+    let request = requests
+        .iter()
+        .find(|request| has_function_call_output(request, "invalid-cwd"))
+        .expect("parent receives rejected spawn");
+    let body: serde_json::Value = serde_json::from_slice(&request.body)?;
+    let output = body["input"]
+        .as_array()
+        .expect("input array")
+        .iter()
+        .find(|item| item["type"] == "function_call_output" && item["call_id"] == "invalid-cwd")
+        .expect("spawn error");
+    assert!(output["output"].to_string().contains(error), "{output}");
+    Ok(())
+}
+
+#[test_case("none"; "fresh child")]
+#[test_case("all"; "history fork")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_cwd_selects_child_workspace_without_moving_parent(
+    fork_turns: &str,
+) -> Result<()> {
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("enable collaboration");
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("enable v2");
+        config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let child_cwd = test.workspace_path_uri("child-worktree")?;
+    test.fs()
+        .create_directory(
+            &child_cwd,
+            CreateDirectoryOptions {
+                recursive: true,
+                follow_symlinks: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .write_file(
+            &child_cwd.join("AGENTS.md")?,
+            b"Child workspace instruction: use the copper test runner.".to_vec(),
+            Default::default(),
+            /*sandbox*/ None,
+        )
+        .await?;
+    let parent = test.codex.config_snapshot().await;
+    mount_root_collaboration_call(
+        &server,
+        FIRST_PROMPT,
+        "cwd-spawn",
+        "spawn_agent",
+        json!({
+            "message": FIRST_TASK, "task_name": "first", "fork_turns": fork_turns,
+            "cwd": "child-worktree",
+        }),
+    )
+    .await;
+    let child_request = mount_completed_worker(&server, FIRST_TASK, "cwd-spawn").await;
+    let mut created = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(FIRST_PROMPT).await?;
+    let child_id = created.recv().await?;
+    let child = test.thread_manager.get_thread(child_id).await?;
+    wait_for_event(child.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let mut expected = parent.environments.environments.clone();
+    expected[0].cwd = child_cwd;
+    assert_eq!(
+        child.config_snapshot().await.environments.environments,
+        expected
+    );
+    assert_eq!(
+        test.codex.config_snapshot().await.environments,
+        parent.environments
+    );
+    assert!(
+        child_request
+            .single_request()
+            .body_contains_text("Child workspace instruction: use the copper test runner.")
+    );
+    const NEXT_PROMPT: &str = "spawn a replacement to unload the first worker";
+    mount_root_collaboration_call(
+        &server,
+        NEXT_PROMPT,
+        "cwd-replacement",
+        "spawn_agent",
+        json!({
+            "message": SECOND_TASK, "task_name": "second", "fork_turns": "none",
+        }),
+    )
+    .await;
+    let _replacement_request =
+        mount_completed_worker(&server, SECOND_TASK, "cwd-replacement").await;
+    test.submit_text_turn(NEXT_PROMPT).await?;
+    let replacement = test
+        .thread_manager
+        .get_thread(created.recv().await?)
+        .await?;
+    wait_for_event(replacement.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert!(test.thread_manager.get_thread(child_id).await.is_err());
+    const FOLLOWUP_PROMPT: &str = "continue the worker in its selected checkout";
+    const FOLLOWUP_TASK: &str = "verify the retained child checkout";
+    mount_root_collaboration_call(
+        &server,
+        FOLLOWUP_PROMPT,
+        "cwd-followup",
+        "followup_task",
+        json!({
+            "target": "first", "message": FOLLOWUP_TASK,
+        }),
+    )
+    .await;
+    let _followup = mount_completed_worker(&server, FOLLOWUP_TASK, "cwd-followup").await;
+    test.submit_text_turn(FOLLOWUP_PROMPT).await?;
+    let resumed = test.thread_manager.get_thread(child_id).await?;
+    wait_for_event(resumed.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        resumed.config_snapshot().await.environments.environments,
+        expected
+    );
+    Ok(())
+}
+
 fn body_contains(request: &wiremock::Request, text: &str) -> bool {
     serde_json::from_slice::<serde_json::Value>(&request.body)
         .is_ok_and(|body| body.to_string().contains(text))
