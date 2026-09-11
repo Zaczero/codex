@@ -177,6 +177,12 @@ Run tests with `RUST_MIN_STACK=8388608`, as CI does: debug test threads
 otherwise overflow their stack in many `codex-core` unit tests, which aborts
 them rather than failing them.
 
+Whole-workspace `just test` does not build here: `voice-host` pins the
+GStreamer crates' `v1_28` feature and the pinned nixpkgs ships GStreamer
+1.26.5. Gate on an explicit `-p` package set instead and never report the
+workspace green from it. Keep that set stable across runs: changing it
+changes unified dependency features and rebuilds shared crates.
+
 `just bazel-lock-update` expects a `bazel` binary; the Nix package is
 `bazelisk`, so refresh the lock with `bazelisk mod deps --lockfile_mode=update`
 from the repository root after a `Cargo.lock` change.
