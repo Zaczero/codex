@@ -615,6 +615,9 @@ struct ElicitationRoundTripFixture {
     thread_id: String,
     turn_id: String,
     apps_server_handle: JoinHandle<()>,
+    // The app-server reads credentials and configuration from this home for
+    // the whole round trip, so it must outlive the process above.
+    _codex_home: TempDir,
 }
 
 impl ElicitationRoundTripFixture {
@@ -799,6 +802,7 @@ impl ElicitationRoundTripFixture {
             thread_id: thread.id,
             turn_id: turn.id,
             apps_server_handle,
+            _codex_home: codex_home,
         })
     }
 
