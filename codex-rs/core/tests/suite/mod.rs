@@ -58,6 +58,7 @@ mod compact;
 mod compact_remote;
 mod compact_remote_parity;
 mod compact_resume_fork;
+mod compact_spawned_child;
 mod completion_continuation;
 mod context_annotations;
 mod current_time_reminder;

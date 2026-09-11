@@ -1176,10 +1176,14 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(());
     };
-    let should_compact_for_comp_hash_change = comp_hash_changed(
-        previous_turn_settings.comp_hash.as_deref(),
-        turn_context.model_info().comp_hash.as_deref(),
-    );
+    // A compatibility-hash change only matters for content the previous model produced.
+    // A history of user, developer, and tool input alone (for example a child forked from a
+    // parent turn that has not answered yet) has nothing to translate.
+    let should_compact_for_comp_hash_change =
+        comp_hash_changed(
+            previous_turn_settings.comp_hash.as_deref(),
+            turn_context.model_info().comp_hash.as_deref(),
+        ) && sess.clone_history().await.has_model_generated_items();
     let previous_model = previous_turn_settings.model;
     let previous_model_turn_context = Arc::new(
         turn_context

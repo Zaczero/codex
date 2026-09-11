@@ -11417,8 +11417,15 @@ async fn interrupting_compaction_fallback_retains_last_known_step_context() {
             realtime_active: Some(turn.realtime_active),
         }))
         .await;
+    // The switch compacts only history the previous model produced.
     session
-        .record_conversation_items(&turn, &[user_message("before compaction")])
+        .record_conversation_items(
+            &turn,
+            &[
+                user_message("before compaction"),
+                assistant_message("answered under the previous model"),
+            ],
+        )
         .await;
     session
         .spawn_task(turn, Vec::new(), crate::tasks::RegularTask::new())

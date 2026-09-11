@@ -660,6 +660,14 @@ impl ContextManager {
             .fold(0i64, i64::saturating_add)
     }
 
+    /// Whether any history item was emitted by a model rather than supplied as
+    /// user, developer, or tool input.
+    pub(crate) fn has_model_generated_items(&self) -> bool {
+        self.items
+            .iter()
+            .any(|envelope| is_model_generated_item(&envelope.item))
+    }
+
     // These are local items added after the most recent model-emitted item.
     // They are not reflected in `last_token_usage.total_tokens`.
     fn items_after_last_model_generated_item(

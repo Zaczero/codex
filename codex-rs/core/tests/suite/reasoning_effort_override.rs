@@ -953,9 +953,13 @@ async fn reasoning_effort_override_compaction_fallback_uses_each_models_effort(
 ) -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
+    // The switch compacts only history the previous model produced.
     let first = responses::mount_sse_once(
         &server,
-        responses::sse(vec![responses::ev_completed("first")]),
+        responses::sse(vec![
+            responses::ev_assistant_message("first-answer", "answered under the original model"),
+            responses::ev_completed("first"),
+        ]),
     )
     .await;
     let second = responses::mount_sse_once(
