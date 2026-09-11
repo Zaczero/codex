@@ -99,33 +99,81 @@ fn cur_project_cwd(project_storage: &Path, external_agent_home: &Path) -> Option
 
 fn decode_cur_project_path(encoded: &str) -> Option<PathBuf> {
     #[cfg(not(windows))]
-    let mut path = PathBuf::from("/");
+    let root = PathBuf::from("/");
 
     #[cfg(windows)]
-    let (encoded, mut path) = {
+    let (encoded, root) = {
         let (drive, encoded) = decode_cur_windows_project_drive(encoded)?;
         (encoded, PathBuf::from(format!("{drive}:\\")))
     };
 
     let encoded = encoded.strip_prefix('-').unwrap_or(encoded);
-    for component in encoded.split('-') {
-        if component.is_empty()
-            || matches!(component, "." | "..")
+    let components = encoded.split('-').collect::<Vec<_>>();
+    if components.iter().any(|component| {
+        component.is_empty()
+            || matches!(*component, "." | "..")
             || component.contains(['/', '\\', ':'])
-        {
-            return None;
-        }
-        path.push(component);
+    }) {
+        return None;
     }
 
-    let mut matched_path = None;
     let mut probes = 0;
-    let mut inspect = |candidate: PathBuf| {
-        if probes >= MAX_CUR_PROJECT_PATH_PROBES {
-            return None;
+    decode_cur_project_components(&root, &components, &mut probes)
+}
+
+/// Resolves the encoded `components` below `base`. Cursor replaced every path
+/// separator and every character in [`CUR_PROJECT_SEPARATORS`] with `-`, so
+/// each `-` may be a directory boundary or part of a name. The search probes
+/// the literal path, merged trailing names, and merged ancestor pairs, and
+/// resolves the remaining components below a merged ancestor the same way.
+/// Two distinct existing directories with the same encoding, or a search that
+/// exhausts the probe budget, decode to `None`.
+fn decode_cur_project_components(
+    base: &Path,
+    components: &[&str],
+    probes: &mut usize,
+) -> Option<PathBuf> {
+    let join = |components: &[&str]| {
+        components
+            .iter()
+            .fold(base.to_path_buf(), |path, component| path.join(component))
+    };
+    let mut matched_path = None;
+    match_cur_project_candidate(join(components), &mut matched_path, probes)?;
+
+    for suffix_length in 2..=4 {
+        if suffix_length > components.len() {
+            break;
         }
-        probes += 1;
-        if candidate.is_dir() {
+        let (parent, suffix) = components.split_at(components.len() - suffix_length);
+        let parent = join(parent);
+        if !probe_cur_project_dir(&parent, probes)? {
+            continue;
+        }
+        for separator in CUR_PROJECT_SEPARATORS {
+            match_cur_project_candidate(
+                parent.join(suffix.join(separator)),
+                &mut matched_path,
+                probes,
+            )?;
+        }
+    }
+
+    for right in (1..components.len().saturating_sub(1)).rev() {
+        let left = right - 1;
+        let prefix = join(&components[..left]);
+        if !probe_cur_project_dir(&prefix, probes)? {
+            continue;
+        }
+        let left_name = components[left];
+        let right_name = components[right];
+        let trailing = &components[right + 1..];
+        for separator in CUR_PROJECT_SEPARATORS {
+            let merged_prefix = prefix.join(format!("{left_name}{separator}{right_name}"));
+            if !probe_cur_project_dir(&merged_prefix, probes)? {
+                continue;
+            }
+            let candidate = decode_cur_project_components(&merged_prefix, trailing, probes)?;
             if matched_path
                 .as_ref()
                 .is_some_and(|matched_path| matched_path != &candidate)
@@ -134,79 +182,39 @@ fn decode_cur_project_path(encoded: &str) -> Option<PathBuf> {
             }
             matched_path = Some(candidate);
         }
-        Some(())
-    };
-    inspect(path.clone())?;
-
-    for suffix_length in 2..=4 {
-        let mut parent = path.as_path();
-        let mut suffix = Vec::with_capacity(suffix_length);
-        for _ in 0..suffix_length {
-            let Some(component) = parent.file_name().and_then(|name| name.to_str()) else {
-                break;
-            };
-            suffix.push(component);
-            let Some(ancestor) = parent.parent() else {
-                break;
-            };
-            parent = ancestor;
-        }
-        if suffix.len() != suffix_length {
-            break;
-        }
-        suffix.reverse();
-
-        for separator in CUR_PROJECT_SEPARATORS {
-            inspect(parent.join(suffix.join(separator)))?;
-        }
-    }
-
-    let mut ancestor = path.parent();
-    while let Some(right) = ancestor {
-        let Some(right_name) = right.file_name().and_then(|name| name.to_str()) else {
-            break;
-        };
-        let Some(left) = right.parent() else {
-            break;
-        };
-        let Some(left_name) = left.file_name().and_then(|name| name.to_str()) else {
-            break;
-        };
-        let Some(prefix) = left.parent() else {
-            break;
-        };
-        let Ok(trailing) = path.strip_prefix(right) else {
-            return None;
-        };
-
-        for separator in CUR_PROJECT_SEPARATORS {
-            let merged_prefix = prefix.join(format!("{left_name}{separator}{right_name}"));
-            if probes >= MAX_CUR_PROJECT_PATH_PROBES {
-                return None;
-            }
-            probes += 1;
-            if !merged_prefix.is_dir() {
-                continue;
-            }
-
-            if probes >= MAX_CUR_PROJECT_PATH_PROBES {
-                return None;
-            }
-            probes += 1;
-            let candidate = merged_prefix.join(trailing);
-            if !candidate.is_dir()
-                || matched_path
-                    .as_ref()
-                    .is_some_and(|matched_path| matched_path != &candidate)
-            {
-                return None;
-            }
-            matched_path = Some(candidate);
-        }
-        ancestor = Some(left);
     }
 
     matched_path
+}
+
+/// Spends one probe of the budget on a directory check; `None` once the
+/// budget is exhausted.
+fn probe_cur_project_dir(path: &Path, probes: &mut usize) -> Option<bool> {
+    if *probes >= MAX_CUR_PROJECT_PATH_PROBES {
+        return None;
+    }
+    *probes += 1;
+    Some(path.is_dir())
+}
+
+/// Records `candidate` when it exists; `None` when the budget is exhausted or
+/// a different directory already matched.
+fn match_cur_project_candidate(
+    candidate: PathBuf,
+    matched_path: &mut Option<PathBuf>,
+    probes: &mut usize,
+) -> Option<()> {
+    if !probe_cur_project_dir(&candidate, probes)? {
+        return Some(());
+    }
+    if matched_path
+        .as_ref()
+        .is_some_and(|matched_path| matched_path != &candidate)
+    {
+        return None;
+    }
+    *matched_path = Some(candidate);
+    Some(())
 }
 
 #[cfg(any(windows, test))]
