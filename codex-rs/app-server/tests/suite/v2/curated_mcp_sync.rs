@@ -18,6 +18,7 @@ use codex_app_server_protocol::McpServerToolCallResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_features::Feature;
+use core_test_support::find_executable_on_path;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -349,13 +350,6 @@ fn write_plugin(
         }))?,
     )?;
     Ok(())
-}
-
-fn find_executable_on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|directory| directory.join(name))
-        .find(|candidate| candidate.is_file())
 }
 
 fn run_git(git: &Path, cwd: &Path, args: &[&str]) -> Result<()> {

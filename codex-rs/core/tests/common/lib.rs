@@ -155,6 +155,15 @@ pub fn test_tmp_path_buf() -> PathBuf {
     test_tmp_path().into_path_buf()
 }
 
+/// Locates a program on the inherited `PATH` for tests that spawn or name
+/// system utilities whose installation directory differs across platforms.
+pub fn find_executable_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
 /// Fetch a DotSlash resource and return the resolved executable/file path.
 pub fn fetch_dotslash_file(
     dotslash_file: &std::path::Path,

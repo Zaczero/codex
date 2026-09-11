@@ -130,8 +130,11 @@ async fn can_apply_linux_sandbox_policy(
     sandbox_cwd: &AbsolutePathBuf,
     env: HashMap<String, String>,
 ) -> bool {
+    let Some(true_path) = core_test_support::find_executable_on_path("true") else {
+        return false;
+    };
     let spawn_result = spawn_command_under_sandbox(
-        vec!["/usr/bin/true".to_string()],
+        vec![true_path.to_string_lossy().into_owned()],
         command_cwd.clone(),
         permission_profile,
         sandbox_cwd,

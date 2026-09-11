@@ -31,6 +31,7 @@ use codex_features::Feature;
 use codex_plugin::PluginId;
 use codex_protocol::config_types::TrustLevel;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::find_executable_on_path;
 use core_test_support::skip_if_host_windows;
 use core_test_support::skip_if_remote;
 use pretty_assertions::assert_eq;
@@ -700,9 +701,7 @@ async fn automatic_marketplace_upgrade_refreshes_hook_runtime_for_loaded_session
 
     let original_path =
         std::env::var_os("PATH").ok_or_else(|| anyhow::anyhow!("PATH is required for git"))?;
-    let real_git = std::env::split_paths(&original_path)
-        .map(|directory| directory.join("git"))
-        .find(|path| path.is_file())
+    let real_git = find_executable_on_path("git")
         .ok_or_else(|| anyhow::anyhow!("git was not found on PATH"))?;
     let wrapper_path = git_wrapper.path().join("git");
     std::fs::write(

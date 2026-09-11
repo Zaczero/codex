@@ -98,7 +98,7 @@ pub fn zsh_fork_test_builder(
     })
 }
 
-fn find_test_zsh_path() -> Result<Option<PathBuf>> {
+pub fn find_test_zsh_path() -> Result<Option<PathBuf>> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let dotslash_zsh = repo_root.join("codex-rs/app-server/tests/suite/zsh");
     if !dotslash_zsh.is_file() {
@@ -118,11 +118,17 @@ fn find_test_zsh_path() -> Result<Option<PathBuf>> {
     }
 }
 
-fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
+pub fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
+    let (Some(true_path), Some(false_path)) = (
+        crate::find_executable_on_path("true"),
+        crate::find_executable_on_path("false"),
+    ) else {
+        return false;
+    };
     let status = std::process::Command::new(zsh_path)
         .arg("-fc")
-        .arg("/usr/bin/true")
-        .env("EXEC_WRAPPER", "/usr/bin/false")
+        .arg(true_path)
+        .env("EXEC_WRAPPER", false_path)
         .status();
     match status {
         Ok(status) => !status.success(),

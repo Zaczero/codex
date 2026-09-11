@@ -30,9 +30,12 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_features::Feature;
+use core_test_support::find_executable_on_path;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
+use core_test_support::zsh_fork::find_test_zsh_path;
+use core_test_support::zsh_fork::supports_exec_wrapper_intercept;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -453,14 +456,19 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
         return Ok(());
     }
     eprintln!("using zsh path for zsh-fork test: {}", zsh_path.display());
+    let Some(rm_path) = find_executable_on_path("rm") else {
+        eprintln!("skipping zsh fork subcommand decline test: no rm executable found");
+        return Ok(());
+    };
     let first_file = workspace.join("first.txt");
     let second_file = workspace.join("second.txt");
     std::fs::write(&first_file, "one")?;
     std::fs::write(&second_file, "two")?;
     let shell_command = format!(
-        "/bin/rm {} && /bin/rm {}",
+        "{rm} {} && {rm} {}",
         first_file.display(),
-        second_file.display()
+        second_file.display(),
+        rm = rm_path.display()
     );
     let tool_call_arguments = serde_json::to_string(&serde_json::json!({
         "cmd": shell_command,
@@ -561,8 +569,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             .expect("approval command should be present");
         let has_first_file = approval_command.contains(&first_file_str);
         let has_second_file = approval_command.contains(&second_file_str);
-        let mentions_rm_binary =
-            approval_command.contains("/bin/rm ") || approval_command.contains("/usr/bin/rm ");
+        let mentions_rm_binary = approval_command.contains(&format!("{} ", rm_path.display()));
         let has_rm_action = params.command_actions.as_ref().is_some_and(|actions| {
             actions.iter().any(|action| match action {
                 CommandAction::Read { name, .. } => name == "rm",
@@ -783,36 +790,4 @@ fn create_config_toml(
         .disable_feature(Feature::RemoteModels)
         .with_features(feature_flags)
         .write(codex_home)
-}
-
-fn find_test_zsh_path() -> Result<Option<std::path::PathBuf>> {
-    let repo_root = codex_utils_cargo_bin::repo_root()?;
-    let dotslash_zsh = repo_root.join("codex-rs/app-server/tests/suite/zsh");
-    if !dotslash_zsh.is_file() {
-        eprintln!(
-            "skipping zsh fork test: shared zsh DotSlash file not found at {}",
-            dotslash_zsh.display()
-        );
-        return Ok(None);
-    }
-    match core_test_support::fetch_dotslash_file(&dotslash_zsh, /*dotslash_cache*/ None) {
-        Ok(path) => return Ok(Some(path)),
-        Err(error) => {
-            eprintln!("failed to fetch vendored zsh via dotslash: {error:#}");
-        }
-    }
-
-    Ok(None)
-}
-
-fn supports_exec_wrapper_intercept(zsh_path: &Path) -> bool {
-    let status = std::process::Command::new(zsh_path)
-        .arg("-fc")
-        .arg("/usr/bin/true")
-        .env("EXEC_WRAPPER", "/usr/bin/false")
-        .status();
-    match status {
-        Ok(status) => !status.success(),
-        Err(_) => false,
-    }
 }
