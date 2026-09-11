@@ -83,6 +83,9 @@ fn system_directories() -> Vec<PathBuf> {
         "/bin",
         "/usr/sbin",
         "/sbin",
+        // The NixOS and nix-darwin system profile; its entries resolve into the
+        // read-only Nix store.
+        "/run/current-system/sw/bin",
     ]
     .into_iter()
     .map(PathBuf::from);
