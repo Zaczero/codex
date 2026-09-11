@@ -115,14 +115,19 @@ fn effective_workspace_intersection_preserves_network_metadata_and_temp() {
     let result = intersection(&authority, &requested, &project);
     let policy = result.file_system_sandbox_policy();
 
+    assert!(policy.entries.contains(&special(Tmpdir, Write)));
+    // The fixture lives under TMPDIR wherever the environment sets one, so the
+    // preserved Tmpdir grant would mask the read-only root below.
+    let mut workspace_policy = policy.clone();
+    workspace_policy
+        .entries
+        .retain(|entry| entry != &special(Tmpdir, Write));
     assert_eq!(
-        [&root, &project]
-            .map(|path| policy
-                .resolve_access_for_local_path_with_cwd(path.as_path(), root.as_path())),
+        [&root, &project].map(|path| workspace_policy
+            .resolve_access_for_local_path_with_cwd(path.as_path(), root.as_path())),
         [Read, Write]
     );
     assert_eq!(result.network_sandbox_policy(), Restricted);
-    assert!(policy.entries.contains(&special(Tmpdir, Write)));
     for name in [".git", ".agents", ".codex"] {
         let protected = project.join(name);
         assert!(!policy.can_write_local_path_with_cwd(protected.as_path(), root.as_path()));
