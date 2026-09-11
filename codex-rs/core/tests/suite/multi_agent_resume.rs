@@ -320,6 +320,26 @@ async fn cold_root_resume_restores_agent_identity_and_role_on_followup() -> Resu
         )
     );
 
+    // Residency holds two subagents, so spawning the sibling evicts the idle least-recently-used
+    // child. Let the grandchild finish first so the eviction takes it, not the worker this test
+    // flushes and resumes; a worker evicted here has no live recorder left to flush.
+    let grandchild_thread_id = initial
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|id| ![root_thread_id, worker_thread_id].contains(id))
+        .ok_or_else(|| anyhow::anyhow!("spawned grandchild should be registered"))?;
+    let grandchild_thread = initial
+        .thread_manager
+        .get_thread(grandchild_thread_id)
+        .await?;
+    wait_for_event(grandchild_thread.as_ref(), |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    drop(grandchild_thread);
+
     let sibling_spawn_args = serde_json::to_string(&json!({
         "message": SIBLING_TASK,
         "task_name": SIBLING_NAME,
